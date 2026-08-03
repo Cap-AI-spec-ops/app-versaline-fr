@@ -298,7 +298,7 @@ export default function DocumentGeneratorPanel() {
     setIsSavingDraft(false);
 
     if (!result.ok) {
-      setMessage(result.error);
+      setMessage(result.error ?? "Could not save draft.");
       setFieldErrors(result.fieldErrors ?? {});
       return null;
     }
@@ -334,7 +334,12 @@ export default function DocumentGeneratorPanel() {
     setIsGeneratingClause(false);
 
     if (!result.ok) {
-      setMessage(result.error);
+      setMessage(result.error ?? "Could not generate special clause.");
+      return;
+    }
+
+    if (!result.clause) {
+      setMessage("Generated clause was empty. Please try again.");
       return;
     }
 
@@ -387,7 +392,12 @@ export default function DocumentGeneratorPanel() {
     setIsExporting(false);
 
     if (!result.ok) {
-      setMessage(result.error);
+      setMessage(result.error ?? "Could not export document.");
+      return;
+    }
+
+    if (!result.downloadUrl || !result.mimeType) {
+      setMessage("Export completed without a valid download payload.");
       return;
     }
 
@@ -427,7 +437,12 @@ export default function DocumentGeneratorPanel() {
     setIsUploadingTemplate(false);
 
     if (!result.ok) {
-      setMessage(result.error);
+      setMessage(result.error ?? "Could not upload template.");
+      return;
+    }
+
+    if (!result.template) {
+      setMessage("Template upload response was incomplete.");
       return;
     }
 

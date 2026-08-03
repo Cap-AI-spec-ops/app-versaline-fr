@@ -410,20 +410,21 @@ function extractGeminiImagePart(payload: GeminiGenerateContentResponse) {
 }
 
 function mergeGeminiUsage(usages: Array<GeminiGenerateContentResponse["usageMetadata"]>) {
-  return usages.reduce(
-    (accumulator, usage) => ({
-      promptTokenCount: (accumulator.promptTokenCount ?? 0) + (usage?.promptTokenCount ?? 0),
-      candidatesTokenCount: (accumulator.candidatesTokenCount ?? 0) + (usage?.candidatesTokenCount ?? 0),
-      totalTokenCount: (accumulator.totalTokenCount ?? 0) + (usage?.totalTokenCount ?? 0),
-      cachedContentTokenCount: (accumulator.cachedContentTokenCount ?? 0) + (usage?.cachedContentTokenCount ?? 0),
-    }),
-    {
-      promptTokenCount: 0,
-      candidatesTokenCount: 0,
-      totalTokenCount: 0,
-      cachedContentTokenCount: 0,
-    },
-  );
+  const merged = {
+    promptTokenCount: 0,
+    candidatesTokenCount: 0,
+    totalTokenCount: 0,
+    cachedContentTokenCount: 0,
+  };
+
+  for (const usage of usages) {
+    merged.promptTokenCount += usage?.promptTokenCount ?? 0;
+    merged.candidatesTokenCount += usage?.candidatesTokenCount ?? 0;
+    merged.totalTokenCount += usage?.totalTokenCount ?? 0;
+    merged.cachedContentTokenCount += usage?.cachedContentTokenCount ?? 0;
+  }
+
+  return merged;
 }
 
 function normalizeGeminiUsage(usage: GeminiGenerateContentResponse["usageMetadata"]): AITokenUsage | null {
@@ -447,8 +448,9 @@ function base64ToFile(input: { base64: string; mimeType: string; originalName: s
     : input.originalName;
   const filename = `${baseName}-enhanced.${extension}`;
   const buffer = Buffer.from(input.base64, "base64");
+  const bytes = new Uint8Array(buffer);
 
-  return new File([buffer], filename, {
+  return new File([bytes], filename, {
     type: input.mimeType,
     lastModified: Date.now(),
   });
@@ -460,8 +462,9 @@ function bufferToFile(input: { buffer: Buffer; mimeType: string; originalName: s
     ? input.originalName.slice(0, input.originalName.lastIndexOf("."))
     : input.originalName;
   const filename = `${baseName}-enhanced.${extension}`;
+  const bytes = new Uint8Array(input.buffer);
 
-  return new File([input.buffer], filename, {
+  return new File([bytes], filename, {
     type: input.mimeType,
     lastModified: Date.now(),
   });

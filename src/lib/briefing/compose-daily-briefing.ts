@@ -611,7 +611,7 @@ async function composeAIDailyBriefing(input: {
         topActions: result.top_actions.map((action) => ({
           title: action.title,
           reason: action.reason,
-          dueHint: action.due_hint,
+          dueHint: action.due_hint ?? null,
         })),
         workspacePulse: result.workspace_pulse,
       },

@@ -338,7 +338,7 @@ export default function MailboxSettingsPanel() {
   }
 
   async function syncNow(provider: MailProvider) {
-    if (!workspace?.id) {
+    if (!supabase || !workspace?.id) {
       setError("Could not resolve current workspace.");
       return;
     }
