@@ -1,16 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/mailbox/sync",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/mailbox/sync/worker",
-      "schedule": "* * * * *"
-    },
-    {
       "path": "/api/daily-briefing/scheduled",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
