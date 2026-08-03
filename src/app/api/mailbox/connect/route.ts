@@ -92,18 +92,7 @@ export async function GET(request: NextRequest) {
     provider,
     options: {
       redirectTo,
-      scopes:
-        provider === "google"
-          ? "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events"
-          : "openid email profile offline_access Mail.Read Calendars.ReadWrite",
-      queryParams:
-        provider === "google"
-          ? {
-              access_type: "offline",
-              prompt: "consent",
-              include_granted_scopes: "true",
-            }
-          : undefined,
+      scopes: "openid email profile offline_access Mail.Read Calendars.ReadWrite",
     },
   });
 

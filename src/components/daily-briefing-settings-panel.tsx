@@ -193,7 +193,7 @@ export default function DailyBriefingSettingsPanel() {
     ]);
 
     if (!policyResult.error) {
-      const nextPolicy = {
+      const nextPolicy: { enabled: boolean; control: DailyBriefingControl } = {
         enabled: policyResult.data?.daily_briefing_enabled ?? true,
         control: policyResult.data?.daily_briefing_control === "team_lead_select" ? "team_lead_select" : "owner_locked",
       };

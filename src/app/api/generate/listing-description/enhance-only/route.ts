@@ -77,8 +77,8 @@ export async function POST(request: NextRequest) {
     resolvedEnhancementProvider === "gemini" ? "gemini" : "gemini";
   const effectiveEnhancementModel =
     resolvedEnhancementProvider === "gemini"
-      ? resolvedEnhancementModel
-      : process.env.GEMINI_LISTING_PHOTO_ENHANCEMENT_MODEL?.trim() || null;
+      ? (resolvedEnhancementModel ?? listingActionConfig.model)
+      : (process.env.GEMINI_LISTING_PHOTO_ENHANCEMENT_MODEL?.trim() || listingActionConfig.model);
 
   const plannedCredits = roundCreditAmount(imageFiles.length * PHOTO_ENHANCEMENT_CREDIT_PER_PHOTO);
   const idempotencyKey = request.headers.get("Idempotency-Key") ?? `enhance-only:${crypto.randomUUID()}`;

@@ -44,7 +44,10 @@ const FEE_PAYER_OPTIONS = [
 
 const DPE_OPTIONS = ["A", "B", "C", "D", "E", "F", "G", "N/A"] as const;
 
-type BootstrapSuccess = Extract<DocumentGeneratorBootstrapResult, { ok: true }>;
+type BootstrapSuccess = Extract<
+  DocumentGeneratorBootstrapResult,
+  { contacts: unknown[]; properties: unknown[]; templates: unknown[]; brandingReady: boolean }
+>;
 type TemplateSource = (typeof TEMPLATE_OPTIONS)[number]["value"];
 
 type MandatVenteFormState = {
@@ -235,17 +238,19 @@ export default function DocumentGeneratorPanel() {
 
     setIsBootstrapping(false);
 
-    if (!result.ok) {
+    if (!("contacts" in result) || !("properties" in result) || !("templates" in result) || !("brandingReady" in result)) {
       setBootstrap(null);
-      setBootstrapError(result.error);
+      setBootstrapError(("error" in result && typeof result.error === "string" ? result.error : null) ?? "Could not load document generator data.");
       return;
     }
 
-    setBootstrap(result);
+    const successResult = result as BootstrapSuccess;
+
+    setBootstrap(successResult);
     setBootstrapError(null);
 
-    if (!selectedTemplateId && result.templates.length > 0) {
-      setSelectedTemplateId(result.templates[0]?.id ?? "");
+    if (!selectedTemplateId && successResult.templates.length > 0) {
+      setSelectedTemplateId(successResult.templates[0]?.id ?? "");
     }
   }
 

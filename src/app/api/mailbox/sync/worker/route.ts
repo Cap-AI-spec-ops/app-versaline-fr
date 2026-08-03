@@ -115,7 +115,7 @@ async function processMailboxSyncQueue(request: NextRequest) {
 
 async function processOneMailboxSyncJob(params: {
   requestUrl: string;
-  supabaseAdmin: ReturnType<typeof getSupabaseAdminClient>;
+  supabaseAdmin: NonNullable<ReturnType<typeof getSupabaseAdminClient>>;
   job: MailboxSyncJobRow;
   inboundSecret: string;
 }): Promise<{ ok: true; processedMessages: number; savedSummaries: number } | { ok: false; reason: string }> {
@@ -203,7 +203,7 @@ async function processOneMailboxSyncJob(params: {
 }
 
 async function finalizeMailboxSyncJob(
-  supabaseAdmin: ReturnType<typeof getSupabaseAdminClient>,
+  supabaseAdmin: NonNullable<ReturnType<typeof getSupabaseAdminClient>>,
   jobId: string,
   status: "succeeded" | "failed",
   processedMessages: number,

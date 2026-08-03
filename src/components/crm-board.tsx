@@ -1318,7 +1318,7 @@ export default function CrmBoard() {
     setIsSaving(false);
   }
 
-  async function deleteTimelineEvent(eventId: string, eventType: ContactEventType, eventTitle: string) {
+  async function deleteTimelineEvent(eventId: string, eventType: TimelineEventType, eventTitle: string) {
     if (!workspace?.id || !selectedContactId) {
       return;
     }

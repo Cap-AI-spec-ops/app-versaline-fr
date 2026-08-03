@@ -963,7 +963,7 @@ export async function POST(request: NextRequest) {
 }
 
 async function loadAbsentProfilesForDate(params: {
-  supabase: ReturnType<typeof getSupabaseAdminClient>;
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdminClient>>;
   workspaceId: string;
   localDate: string;
   workspaceProfiles: WorkspaceProfileRow[];
@@ -1039,7 +1039,7 @@ function appendAbsenceNotification(params: {
 }
 
 async function loadTakeoverBriefingsForRecipient(params: {
-  supabase: ReturnType<typeof getSupabaseAdminClient>;
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdminClient>>;
   workspaceId: string;
   localDate: string;
   timezone: string;

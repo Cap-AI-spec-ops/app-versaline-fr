@@ -44,7 +44,6 @@ type WorkspaceCompanyScopeRow = {
 export async function POST(request: NextRequest) {
   const supabase = await getSupabaseServerClient();
   const adminClient = getSupabaseAdminClient();
-  const policyReadClient = adminClient ?? supabase;
 
   if (!supabase) {
     return NextResponse.json({ error: "Supabase client unavailable" }, { status: 500 });
@@ -59,6 +58,8 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+
+  const policyReadClient = adminClient;
 
   const {
     data: { user },

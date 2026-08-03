@@ -41,7 +41,7 @@ type PersonalEventForm = {
   location: string;
 };
 
-type AbsenceStatus = "confirmed" | "cancelled";
+type AbsenceStatus = "planned" | "confirmed" | "cancelled";
 
 type AbsenceForm = {
   profileId: string;
@@ -154,6 +154,10 @@ function formatMemberName(firstName: string | null, lastName: string | null) {
 function formatStatusLabel(status: AbsenceStatus) {
   if (status === "cancelled") {
     return "Cancelled";
+  }
+
+  if (status === "planned") {
+    return "Planned";
   }
 
   return "Confirmed";

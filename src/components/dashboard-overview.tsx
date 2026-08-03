@@ -32,14 +32,6 @@ type CrmEventRow = {
   occurred_at: string;
 };
 
-type DashboardActivityRow = {
-  id: string;
-  contact_id: string | null;
-  event_type: string;
-  title: string;
-  occurred_at: string;
-};
-
 type DashboardEmailSummaryRow = {
   id: string;
   contact_id: string | null;
@@ -55,6 +47,7 @@ type DashboardActivityRow = {
   event_type: string;
   title: string;
   occurred_at: string;
+  metadata: Record<string, unknown> | null;
   source: "crm_contact_events" | "email_summaries";
   description: string;
 };
@@ -116,7 +109,7 @@ function formatDateOnly(value: string | null, emptyLabel = "Not set") {
   }).format(new Date(value));
 }
 
-function getTimelineEventDueDate(event: CrmEventRow) {
+function getTimelineEventDueDate(event: { metadata: Record<string, unknown> | null }) {
   const metadata = event.metadata;
 
   if (!metadata || typeof metadata !== "object") {
@@ -271,6 +264,7 @@ export default async function DashboardOverview() {
       event_type: "email_summary",
       title: "Email summary",
       occurred_at: summary.received_at ?? summary.created_at ?? new Date().toISOString(),
+      metadata: null,
       source: "email_summaries" as const,
       description: summary.summary_text ?? "Email received",
     })),
@@ -294,6 +288,7 @@ export default async function DashboardOverview() {
         event_type: event.event_type,
         title: event.title,
         occurred_at: event.occurred_at,
+        metadata: event.metadata,
         source: "crm_contact_events" as const,
         description: event.title,
       })),
