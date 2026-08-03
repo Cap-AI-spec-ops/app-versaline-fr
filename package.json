@@ -1,0 +1,44 @@
+{
+  "name": "versaline",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1.2.12",
+    "@ai-sdk/google": "^1.1.16",
+    "@ai-sdk/mistral": "^1.1.9",
+    "@ai-sdk/xai": "^1.2.8",
+    "@react-pdf/renderer": "^4.3.0",
+    "@supabase/ssr": "^0.12.3",
+    "@supabase/supabase-js": "^2.110.8",
+    "@types/nodemailer": "^8.0.1",
+    "ai": "^4.3.16",
+    "docxtemplater": "^3.66.7",
+    "next": "latest",
+    "nodemailer": "^9.0.3",
+    "pizzip": "^3.2.0",
+    "react": "latest",
+    "react-dom": "latest",
+    "sharp": "^0.35.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "latest",
+    "eslint-config-next": "latest",
+    "tailwindcss": "latest",
+    "typescript": "latest"
+  },
+  "allowScripts": {
+    "sharp@0.34.5": true,
+    "sharp@0.35.3": true
+  }
+}
