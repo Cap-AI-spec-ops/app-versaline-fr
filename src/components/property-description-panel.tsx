@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import {
   MARKET_LANGUAGE_OPTIONS,
@@ -12,6 +13,7 @@ import {
 import { dispatchCreditsBalanceRefresh } from "@/lib/credits/client-refresh";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useCurrentWorkspace } from "@/lib/workspace/use-current-workspace";
+import WorkspacePropertyPicker from "@/components/workspace-property-picker";
 
 type Tone = "professional" | "warm" | "premium" | "concise";
 type TransactionType = "sale" | "rent";
@@ -101,6 +103,7 @@ const ENHANCEMENT_STYLES: Array<{ value: EnhancementStyle; label: string }> = [
 
 export default function PropertyDescriptionPanel() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const searchParams = useSearchParams();
   const { workspace, isLoading: isWorkspaceLoading, error: workspaceError, isSuperAdmin } = useCurrentWorkspace();
 
   const [propertyType, setPropertyType] = useState("Apartment");
@@ -139,6 +142,17 @@ export default function PropertyDescriptionPanel() {
   const [marketLocale, setMarketLocale] = useState("fr-FR");
   const [marketLanguage, setMarketLanguage] = useState("fr");
   const [marketTimezone, setMarketTimezone] = useState("Europe/Paris");
+  const [selectedWorkspacePropertyId, setSelectedWorkspacePropertyId] = useState("");
+
+  useEffect(() => {
+    const queryPropertyId = searchParams.get("propertyId")?.trim() ?? "";
+
+    if (!queryPropertyId) {
+      return;
+    }
+
+    setSelectedWorkspacePropertyId((previous) => (previous ? previous : queryPropertyId));
+  }, [searchParams]);
 
   const extraPhotoCount = Math.max(0, files.length - INCLUDED_PHOTO_COUNT);
   const extraPhotoCredits = extraPhotoCount * EXTRA_CREDIT_PER_PHOTO;
@@ -202,6 +216,54 @@ export default function PropertyDescriptionPanel() {
     setMarketLanguage(workspace.default_language || "fr");
     setMarketTimezone(workspace.default_timezone || "Europe/Paris");
   }, [workspace]);
+
+  const applyWorkspaceProperty = (property: {
+    transactionType: "sale" | "rent" | null;
+    propertyType: string | null;
+    city: string | null;
+    neighborhood: string | null;
+    rooms: number | null;
+    bathrooms: number | null;
+    loiCarrezSurfaceSqm: number | null;
+    dpeEnergyRating: string | null;
+    dpeClimateRating: string | null;
+  }) => {
+    if (property.transactionType === "sale" || property.transactionType === "rent") {
+      setTransactionType(property.transactionType);
+    }
+
+    if (property.propertyType) {
+      setPropertyType(property.propertyType);
+    }
+
+    if (property.city) {
+      setCity(property.city);
+    }
+
+    if (property.neighborhood) {
+      setNeighborhood(property.neighborhood);
+    }
+
+    if (property.rooms !== null) {
+      setRooms(String(property.rooms));
+    }
+
+    if (property.bathrooms !== null) {
+      setBathrooms(String(property.bathrooms));
+    }
+
+    if (property.loiCarrezSurfaceSqm !== null) {
+      setSurfaceArea(String(property.loiCarrezSurfaceSqm));
+    }
+
+    if (property.dpeEnergyRating) {
+      setDpeEnergyClass(property.dpeEnergyRating);
+    }
+
+    if (property.dpeClimateRating) {
+      setDpeClimateClass(property.dpeClimateRating);
+    }
+  };
 
   const handleFilesChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const nextFiles = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/"));
@@ -678,6 +740,40 @@ export default function PropertyDescriptionPanel() {
           </div>
         ) : null}
       </div>
+
+      <article className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">Workspace properties</p>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Pick an existing property</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          Select a workspace property to prefill this form. You can still adjust every field before generation.
+        </p>
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <div className="min-w-[320px] flex-1">
+            <WorkspacePropertyPicker
+              workspaceId={workspace?.id}
+              value={selectedWorkspacePropertyId}
+              onChange={setSelectedWorkspacePropertyId}
+              onPick={(property) => {
+                if (property) {
+                  applyWorkspaceProperty(property);
+                }
+              }}
+              label="Property"
+              helperText="Linked records come from the workspace properties table."
+            />
+          </div>
+
+          {selectedWorkspacePropertyId ? (
+            <button
+              type="button"
+              onClick={() => setSelectedWorkspacePropertyId("")}
+              className="rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--foreground)] transition hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Unlink
+            </button>
+          ) : null}
+        </div>
+      </article>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <form onSubmit={handleSubmit} className="settings-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">

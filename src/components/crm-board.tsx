@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { withSessionReloadFallback } from "@/lib/auth/session-error-message";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -8,7 +9,8 @@ import { useCurrentWorkspace } from "@/lib/workspace/use-current-workspace";
 import { useAccessibleWorkspaces } from "@/lib/workspace/use-accessible-workspaces";
 import { useWorkspaceMembers } from "@/lib/workspace/use-workspace-members";
 
-type ClientType = "buyer" | "seller" | "tenant" | "landlord" | "investor" | "vendor" | "other";
+type ClientType = "buyer" | "seller" | "tenant" | "landlord" | "investor" | "other";
+type ContactRole = ClientType;
 type ContactStage =
   | "new_lead"
   | "qualified"
@@ -35,6 +37,7 @@ type CrmContact = {
   budget: number | null;
   currency: string;
   client_type: ClientType;
+  contact_roles: ContactRole[] | null;
   stage: ContactStage;
   priority: ContactPriority;
   source: string | null;
@@ -43,6 +46,22 @@ type CrmContact = {
   assigned_to: string | null;
   next_follow_up_at: string | null;
   last_contact_at: string | null;
+  buyer_target_locations: string[] | null;
+  buyer_property_types: string[] | null;
+  buyer_budget_min: number | null;
+  buyer_budget_max: number | null;
+  buyer_bedrooms_min: number | null;
+  buyer_surface_min_m2: number | null;
+  buyer_move_in_window: string | null;
+  buyer_country_details: Record<string, unknown> | null;
+  tenant_target_locations: string[] | null;
+  tenant_property_types: string[] | null;
+  tenant_budget_min: number | null;
+  tenant_budget_max: number | null;
+  tenant_bedrooms_min: number | null;
+  tenant_surface_min_m2: number | null;
+  tenant_move_in_window: string | null;
+  tenant_country_details: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };
@@ -83,12 +102,36 @@ type ContactFormState = {
   address: string;
   budget: string;
   currency: string;
-  client_type: ClientType;
+  contact_roles: ContactRole[];
   priority: ContactPriority;
   source: string;
   preferred_channel: ContactChannel;
   notes: string;
   next_follow_up_at: string;
+  buyer_target_locations: string;
+  buyer_property_types: ContactPropertyType[];
+  buyer_budget_min: string;
+  buyer_budget_max: string;
+  buyer_bedrooms_min: string;
+  buyer_surface_min_m2: string;
+  buyer_move_in_window: string;
+  buyer_country_notes: string;
+  buyer_wants_garden: boolean;
+  buyer_wants_balcony: boolean;
+  buyer_floor_wanted: string;
+  buyer_floor_avoid: string;
+  tenant_target_locations: string;
+  tenant_property_types: ContactPropertyType[];
+  tenant_budget_min: string;
+  tenant_budget_max: string;
+  tenant_bedrooms_min: string;
+  tenant_surface_min_m2: string;
+  tenant_move_in_window: string;
+  tenant_country_notes: string;
+  tenant_wants_garden: boolean;
+  tenant_wants_balcony: boolean;
+  tenant_floor_wanted: string;
+  tenant_floor_avoid: string;
   assignee_profile_ids: string[];
 };
 
@@ -102,6 +145,16 @@ type TimelineFormState = {
   title: string;
   body: string;
   due_date: string;
+};
+
+type ContactPropertyType = "apartment" | "house" | "land" | "commercial" | "parking" | "other";
+
+type TimelineEventTypeFilter = "all" | TimelineEventType;
+
+type ContactDetailsDraftSnapshot = {
+  contact: CrmContact;
+  followUpInput: string;
+  assigneeProfileIds: string[];
 };
 
 const STAGE_COLUMNS: Array<{ key: VisibleContactStage; label: string; accentClass: string }> = [
@@ -120,12 +173,36 @@ const EMPTY_CONTACT_FORM: ContactFormState = {
   address: "",
   budget: "",
   currency: "EUR",
-  client_type: "buyer",
+  contact_roles: ["buyer"],
   priority: "normal",
   source: "",
   preferred_channel: "phone",
   notes: "",
   next_follow_up_at: "",
+  buyer_target_locations: "",
+  buyer_property_types: [],
+  buyer_budget_min: "",
+  buyer_budget_max: "",
+  buyer_bedrooms_min: "",
+  buyer_surface_min_m2: "",
+  buyer_move_in_window: "",
+  buyer_country_notes: "",
+  buyer_wants_garden: false,
+  buyer_wants_balcony: false,
+  buyer_floor_wanted: "",
+  buyer_floor_avoid: "",
+  tenant_target_locations: "",
+  tenant_property_types: [],
+  tenant_budget_min: "",
+  tenant_budget_max: "",
+  tenant_bedrooms_min: "",
+  tenant_surface_min_m2: "",
+  tenant_move_in_window: "",
+  tenant_country_notes: "",
+  tenant_wants_garden: false,
+  tenant_wants_balcony: false,
+  tenant_floor_wanted: "",
+  tenant_floor_avoid: "",
   assignee_profile_ids: [],
 };
 
@@ -138,8 +215,199 @@ const EMPTY_TIMELINE_FORM: TimelineFormState = {
 
 const CURRENCY_OPTIONS = ["EUR", "USD", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR", "BRL"] as const;
 
+const CONTACT_ROLE_OPTIONS: ContactRole[] = ["buyer", "seller", "tenant", "landlord", "investor", "other"];
+const CONTACT_PROPERTY_TYPE_OPTIONS: ContactPropertyType[] = ["apartment", "house", "land", "commercial", "parking", "other"];
+const FOLLOW_UP_PRESETS: Array<{ label: string; days: number }> = [
+  { label: "+3d", days: 3 },
+  { label: "+7d", days: 7 },
+  { label: "+14d", days: 14 },
+  { label: "+1m", days: 30 },
+  { label: "+3m", days: 90 },
+];
+const TIMELINE_EVENT_FILTER_OPTIONS: Array<{ label: string; value: TimelineEventTypeFilter }> = [
+  { label: "All", value: "all" },
+  { label: "Note", value: "note" },
+  { label: "Call", value: "call" },
+  { label: "Email", value: "email" },
+  { label: "Meeting", value: "meeting" },
+  { label: "Visit", value: "visit" },
+  { label: "Status", value: "status_change" },
+  { label: "Created", value: "created" },
+  { label: "AI emails", value: "email_summary" },
+];
+
 function requiresBudget(clientType: ClientType) {
-  return clientType !== "seller" && clientType !== "tenant";
+  return clientType === "buyer" || clientType === "tenant";
+}
+
+function normalizeContactRoles(roles: ContactRole[] | null | undefined, fallbackRole: ContactRole): ContactRole[] {
+  const source = Array.isArray(roles) && roles.length > 0 ? roles : [fallbackRole];
+  return Array.from(new Set(source.filter((role): role is ContactRole => CONTACT_ROLE_OPTIONS.includes(role))));
+}
+
+function getPrimaryRoleFromRoles(roles: ContactRole[] | null | undefined, fallbackRole: ContactRole) {
+  const normalized = normalizeContactRoles(roles, fallbackRole);
+  return normalized[0] ?? "buyer";
+}
+
+function hasBuyerRole(roles: ContactRole[]) {
+  return roles.includes("buyer");
+}
+
+function hasTenantRole(roles: ContactRole[]) {
+  return roles.includes("tenant");
+}
+
+function formatRoleLabel(role: ContactRole) {
+  return role.replace(/_/g, " ");
+}
+
+function formatPropertyTypeLabel(type: ContactPropertyType) {
+  return type.replace(/_/g, " ");
+}
+
+function getCountryDetailString(
+  details: Record<string, unknown> | null | undefined,
+  key: "notes" | "preferred_floor" | "avoid_floor",
+) {
+  const value = details?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function getCountryDetailBoolean(
+  details: Record<string, unknown> | null | undefined,
+  key: "wants_garden" | "wants_balcony",
+) {
+  return details?.[key] === true;
+}
+
+function buildCountryDetails(
+  notes: string,
+  wantsGarden: boolean,
+  wantsBalcony: boolean,
+  preferredFloor: string,
+  avoidFloor: string,
+) {
+  const next: Record<string, unknown> = {};
+
+  if (notes.trim()) {
+    next.notes = notes.trim();
+  }
+
+  if (wantsGarden) {
+    next.wants_garden = true;
+  }
+
+  if (wantsBalcony) {
+    next.wants_balcony = true;
+  }
+
+  if (preferredFloor.trim()) {
+    next.preferred_floor = preferredFloor.trim();
+  }
+
+  if (avoidFloor.trim()) {
+    next.avoid_floor = avoidFloor.trim();
+  }
+
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+function patchCountryDetails(
+  details: Record<string, unknown> | null | undefined,
+  patch: Partial<Record<"notes" | "preferred_floor" | "avoid_floor" | "wants_garden" | "wants_balcony", string | boolean>>,
+) {
+  const next: Record<string, unknown> = {
+    ...(details ?? {}),
+  };
+
+  if ("notes" in patch) {
+    const value = typeof patch.notes === "string" ? patch.notes.trim() : "";
+    if (value) {
+      next.notes = value;
+    } else {
+      delete next.notes;
+    }
+  }
+
+  if ("preferred_floor" in patch) {
+    const value = typeof patch.preferred_floor === "string" ? patch.preferred_floor.trim() : "";
+    if (value) {
+      next.preferred_floor = value;
+    } else {
+      delete next.preferred_floor;
+    }
+  }
+
+  if ("avoid_floor" in patch) {
+    const value = typeof patch.avoid_floor === "string" ? patch.avoid_floor.trim() : "";
+    if (value) {
+      next.avoid_floor = value;
+    } else {
+      delete next.avoid_floor;
+    }
+  }
+
+  if ("wants_garden" in patch) {
+    if (patch.wants_garden === true) {
+      next.wants_garden = true;
+    } else {
+      delete next.wants_garden;
+    }
+  }
+
+  if ("wants_balcony" in patch) {
+    if (patch.wants_balcony === true) {
+      next.wants_balcony = true;
+    } else {
+      delete next.wants_balcony;
+    }
+  }
+
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+function parseCommaSeparatedList(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function listToInputValue(values: string[] | null) {
+  if (!values || values.length === 0) {
+    return "";
+  }
+
+  return values.join(", ");
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatDateAsInputValue(date: Date) {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function toNumberOrNull(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatMoney(value: number | null, currency: string) {
@@ -331,7 +599,45 @@ function getEventActorLabel(event: CrmContactEvent, memberNameById: Record<strin
   return memberNameById[event.created_by] ?? "Former teammate";
 }
 
+function normalizeStringArrayForCompare(values: string[]) {
+  return [...values].sort();
+}
+
+function createContactDetailsDraftSnapshot(
+  contact: CrmContact,
+  followUpInput: string,
+  assigneeProfileIds: string[],
+): ContactDetailsDraftSnapshot {
+  return {
+    contact: {
+      ...contact,
+      contact_roles: contact.contact_roles ? [...contact.contact_roles] : null,
+      buyer_target_locations: contact.buyer_target_locations ? [...contact.buyer_target_locations] : null,
+      buyer_property_types: contact.buyer_property_types ? [...contact.buyer_property_types] : null,
+      tenant_target_locations: contact.tenant_target_locations ? [...contact.tenant_target_locations] : null,
+      tenant_property_types: contact.tenant_property_types ? [...contact.tenant_property_types] : null,
+      buyer_country_details: contact.buyer_country_details ? { ...contact.buyer_country_details } : null,
+      tenant_country_details: contact.tenant_country_details ? { ...contact.tenant_country_details } : null,
+    },
+    followUpInput,
+    assigneeProfileIds: normalizeStringArrayForCompare(assigneeProfileIds),
+  };
+}
+
+function areContactDetailsDraftSnapshotsEqual(
+  left: ContactDetailsDraftSnapshot,
+  right: ContactDetailsDraftSnapshot,
+) {
+  return (
+    JSON.stringify(left.contact) === JSON.stringify(right.contact) &&
+    left.followUpInput === right.followUpInput &&
+    JSON.stringify(left.assigneeProfileIds) === JSON.stringify(right.assigneeProfileIds)
+  );
+}
+
 export default function CrmBoard() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { workspace, currentRole, isLoading: isWorkspaceLoading, error: workspaceError } = useCurrentWorkspace();
   const {
     workspaces: accessibleWorkspaces,
@@ -343,6 +649,7 @@ export default function CrmBoard() {
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [events, setEvents] = useState<CrmContactEvent[]>([]);
   const [assigneesByContact, setAssigneesByContact] = useState<Record<string, string[]>>({});
+  const [areAssigneesLoaded, setAreAssigneesLoaded] = useState(false);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState<ContactFormState>(EMPTY_CONTACT_FORM);
   const [timelineForm, setTimelineForm] = useState<TimelineFormState>(EMPTY_TIMELINE_FORM);
@@ -355,6 +662,9 @@ export default function CrmBoard() {
   const [editingEventTitle, setEditingEventTitle] = useState("");
   const [editingEventBody, setEditingEventBody] = useState("");
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
+  const [isContactDetailsOpen, setIsContactDetailsOpen] = useState(false);
+  const [contactDetailsDraftBaseline, setContactDetailsDraftBaseline] = useState<ContactDetailsDraftSnapshot | null>(null);
+  const [isDiscardChangesDialogOpen, setIsDiscardChangesDialogOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSwitchingWorkspace, setIsSwitchingWorkspace] = useState(false);
@@ -366,6 +676,11 @@ export default function CrmBoard() {
   const [contactSearchQuery, setContactSearchQuery] = useState("");
   const [onlyHighPriorityContacts, setOnlyHighPriorityContacts] = useState(false);
   const [onlyEmailSummaries, setOnlyEmailSummaries] = useState(false);
+  const [timelineSearchQuery, setTimelineSearchQuery] = useState("");
+  const [timelineEventTypeFilter, setTimelineEventTypeFilter] = useState<TimelineEventTypeFilter>("all");
+  const [timelineFromDate, setTimelineFromDate] = useState("");
+  const [timelineToDate, setTimelineToDate] = useState("");
+  const [timelineOnlyWithDueDate, setTimelineOnlyWithDueDate] = useState(false);
   const [isEmailFeatureEnabled, setIsEmailFeatureEnabled] = useState(false);
   const [isEmailPolicyLoading, setIsEmailPolicyLoading] = useState(true);
   const canSwitchWorkspaceScope = currentRole === "super_admin" || currentRole === "owner";
@@ -411,6 +726,9 @@ export default function CrmBoard() {
         contact.email ?? "",
         contact.phone ?? "",
         contact.source ?? "",
+        normalizeContactRoles(contact.contact_roles, contact.client_type).join(" "),
+        listToInputValue(contact.buyer_target_locations),
+        listToInputValue(contact.tenant_target_locations),
       ]
         .join(" ")
         .toLowerCase();
@@ -425,9 +743,62 @@ export default function CrmBoard() {
         ? events
         : events.filter((event) => event.event_type !== "email_summary");
 
-      return onlyEmailSummaries ? visibleEvents.filter((event) => event.event_type === "email_summary") : visibleEvents;
+      const emailFiltered = onlyEmailSummaries
+        ? visibleEvents.filter((event) => event.event_type === "email_summary")
+        : visibleEvents;
+
+      const normalizedQuery = timelineSearchQuery.trim().toLowerCase();
+      const fromIso = parseDisplayDateToIso(timelineFromDate);
+      const toIso = parseDisplayDateToIso(timelineToDate);
+
+      return emailFiltered.filter((event) => {
+        if (timelineEventTypeFilter !== "all" && event.event_type !== timelineEventTypeFilter) {
+          return false;
+        }
+
+        if (timelineOnlyWithDueDate && !getTimelineEventDueDate(event)) {
+          return false;
+        }
+
+        if (fromIso || toIso) {
+          const eventDateIso = new Date(event.occurred_at).toISOString().slice(0, 10);
+
+          if (fromIso && eventDateIso < fromIso) {
+            return false;
+          }
+
+          if (toIso && eventDateIso > toIso) {
+            return false;
+          }
+        }
+
+        if (!normalizedQuery) {
+          return true;
+        }
+
+        const haystack = [
+          event.title,
+          event.body ?? "",
+          event.event_type,
+          typeof event.metadata?.triage_reason_code === "string" ? event.metadata.triage_reason_code : "",
+          getTimelineEventDueDate(event) ?? "",
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        return haystack.includes(normalizedQuery);
+      });
     },
-    [events, onlyEmailSummaries, isEmailFeatureEnabled],
+    [
+      events,
+      onlyEmailSummaries,
+      isEmailFeatureEnabled,
+      timelineSearchQuery,
+      timelineEventTypeFilter,
+      timelineFromDate,
+      timelineToDate,
+      timelineOnlyWithDueDate,
+    ],
   );
 
   const keptSummaryCount = useMemo(
@@ -486,6 +857,33 @@ export default function CrmBoard() {
 
     void loadContacts(workspace.id);
   }, [workspace?.id]);
+
+  useEffect(() => {
+    const queryContactId = searchParams.get("contactId")?.trim() ?? "";
+    const shouldOpenDetails = searchParams.get("details") === "1";
+
+    if (!queryContactId || contacts.length === 0) {
+      return;
+    }
+
+    const matched = contacts.find((contact) => contact.id === queryContactId);
+
+    if (!matched) {
+      return;
+    }
+
+    if (selectedContactId !== queryContactId) {
+      setSelectedContactId(queryContactId);
+    }
+
+    if (shouldOpenDetails && (!isContactDetailsOpen || selectedContactId !== queryContactId)) {
+      openContactDetails(queryContactId);
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete("details");
+      const nextQuery = nextParams.toString();
+      router.replace(nextQuery ? `/contacts?${nextQuery}` : "/contacts", { scroll: false });
+    }
+  }, [contacts, isContactDetailsOpen, router, searchParams, selectedContactId]);
 
   useEffect(() => {
     async function loadEmailPolicy(companyId: string) {
@@ -547,6 +945,12 @@ export default function CrmBoard() {
     setIsDeleteFinalCheckEnabled(false);
   }, [selectedContactId]);
 
+  useEffect(() => {
+    if (!selectedContactId) {
+      setIsContactDetailsOpen(false);
+    }
+  }, [selectedContactId]);
+
   async function loadContacts(workspaceId: string) {
     const supabase = getSupabaseBrowserClient();
 
@@ -595,14 +999,18 @@ export default function CrmBoard() {
   async function loadAssigneesForContacts(workspaceId: string, contactIds: string[]) {
     if (contactIds.length === 0) {
       setAssigneesByContact({});
+      setAreAssigneesLoaded(true);
       return;
     }
 
     const supabase = getSupabaseBrowserClient();
 
     if (!supabase) {
+      setAreAssigneesLoaded(true);
       return;
     }
+
+    setAreAssigneesLoaded(false);
 
     const { data, error: assigneesError } = await supabase
       .from("crm_contact_assignees")
@@ -612,6 +1020,7 @@ export default function CrmBoard() {
 
     if (assigneesError) {
       setError(withSessionReloadFallback(assigneesError.message, "Could not load contact assignees."));
+      setAreAssigneesLoaded(true);
       return;
     }
 
@@ -626,6 +1035,7 @@ export default function CrmBoard() {
     }
 
     setAssigneesByContact(mapped);
+    setAreAssigneesLoaded(true);
   }
 
   async function syncContactAssignees(contactId: string, workspaceId: string, nextAssigneeIds: string[]) {
@@ -770,10 +1180,16 @@ export default function CrmBoard() {
     setError(null);
     setMessage(null);
 
+    const roleSelection = normalizeContactRoles(contactForm.contact_roles, "buyer");
+    const primaryRole = roleSelection[0] ?? "buyer";
     const budgetValue = contactForm.budget.trim() ? Number(contactForm.budget) : null;
-    const shouldStoreBudget = requiresBudget(contactForm.client_type);
+    const hasBuyerProfile = hasBuyerRole(roleSelection);
+    const hasTenantProfile = hasTenantRole(roleSelection);
+    const shouldStoreBudget = hasBuyerProfile || hasTenantProfile;
     const nextFollowUpIso = parseDisplayDateToIso(contactForm.next_follow_up_at);
     const createFollowUpError = getDisplayDateError(contactForm.next_follow_up_at);
+    const buyerLocations = parseCommaSeparatedList(contactForm.buyer_target_locations);
+    const tenantLocations = parseCommaSeparatedList(contactForm.tenant_target_locations);
 
     if (shouldStoreBudget && budgetValue !== null && Number.isNaN(budgetValue)) {
       setError("Budget must be a valid number.");
@@ -797,13 +1213,46 @@ export default function CrmBoard() {
       address: contactForm.address.trim() || null,
       budget: shouldStoreBudget ? budgetValue : null,
       currency: contactForm.currency.trim().toUpperCase() || "EUR",
-      client_type: contactForm.client_type,
+      client_type: primaryRole,
+      contact_roles: roleSelection,
       stage: "new_lead" as ContactStage,
       priority: contactForm.priority,
       source: contactForm.source.trim() || null,
       preferred_channel: contactForm.preferred_channel,
       notes: contactForm.notes.trim() || null,
       next_follow_up_at: nextFollowUpIso,
+      buyer_target_locations: hasBuyerProfile ? buyerLocations : null,
+      buyer_property_types: hasBuyerProfile ? contactForm.buyer_property_types : null,
+      buyer_budget_min: null,
+      buyer_budget_max: hasBuyerProfile ? budgetValue : null,
+      buyer_bedrooms_min: hasBuyerProfile ? toNumberOrNull(contactForm.buyer_bedrooms_min) : null,
+      buyer_surface_min_m2: hasBuyerProfile ? toNumberOrNull(contactForm.buyer_surface_min_m2) : null,
+      buyer_move_in_window: hasBuyerProfile ? contactForm.buyer_move_in_window.trim() || null : null,
+      buyer_country_details: hasBuyerProfile
+        ? buildCountryDetails(
+            contactForm.buyer_country_notes,
+            contactForm.buyer_wants_garden,
+            contactForm.buyer_wants_balcony,
+            contactForm.buyer_floor_wanted,
+            contactForm.buyer_floor_avoid,
+          )
+        : null,
+      tenant_target_locations: hasTenantProfile ? tenantLocations : null,
+      tenant_property_types: hasTenantProfile ? contactForm.tenant_property_types : null,
+      tenant_budget_min: null,
+      tenant_budget_max: hasTenantProfile ? budgetValue : null,
+      tenant_bedrooms_min: hasTenantProfile ? toNumberOrNull(contactForm.tenant_bedrooms_min) : null,
+      tenant_surface_min_m2: hasTenantProfile ? toNumberOrNull(contactForm.tenant_surface_min_m2) : null,
+      tenant_move_in_window: hasTenantProfile ? contactForm.tenant_move_in_window.trim() || null : null,
+      tenant_country_details: hasTenantProfile
+        ? buildCountryDetails(
+            contactForm.tenant_country_notes,
+            contactForm.tenant_wants_garden,
+            contactForm.tenant_wants_balcony,
+            contactForm.tenant_floor_wanted,
+            contactForm.tenant_floor_avoid,
+          )
+        : null,
     };
 
     const { data, error: insertError } = await supabase
@@ -871,9 +1320,13 @@ export default function CrmBoard() {
     setError(null);
     setMessage(null);
 
+    const roleSelection = normalizeContactRoles(selectedContact.contact_roles, selectedContact.client_type);
+    const primaryRole = roleSelection[0] ?? "buyer";
     const budgetText = selectedContact.budget === null ? "" : String(selectedContact.budget);
     const budgetValue = budgetText.trim() ? Number(budgetText) : null;
-    const shouldStoreBudget = requiresBudget(selectedContact.client_type);
+    const hasBuyerProfile = hasBuyerRole(roleSelection);
+    const hasTenantProfile = hasTenantRole(roleSelection);
+    const shouldStoreBudget = hasBuyerProfile || hasTenantProfile;
     const nextFollowUpIso = parseDisplayDateToIso(selectedFollowUpInput);
     const editFollowUpError = getDisplayDateError(selectedFollowUpInput);
 
@@ -900,12 +1353,29 @@ export default function CrmBoard() {
         address: selectedContact.address?.trim() || null,
         budget: shouldStoreBudget ? budgetValue : null,
         currency: selectedContact.currency.trim().toUpperCase() || "EUR",
-        client_type: selectedContact.client_type,
+        client_type: primaryRole,
+        contact_roles: roleSelection,
         priority: selectedContact.priority,
         source: selectedContact.source?.trim() || null,
         preferred_channel: selectedContact.preferred_channel,
         notes: selectedContact.notes?.trim() || null,
         next_follow_up_at: nextFollowUpIso,
+        buyer_target_locations: hasBuyerProfile ? selectedContact.buyer_target_locations : null,
+        buyer_property_types: hasBuyerProfile ? selectedContact.buyer_property_types : null,
+        buyer_budget_min: null,
+        buyer_budget_max: hasBuyerProfile ? budgetValue : null,
+        buyer_bedrooms_min: hasBuyerProfile ? selectedContact.buyer_bedrooms_min : null,
+        buyer_surface_min_m2: hasBuyerProfile ? selectedContact.buyer_surface_min_m2 : null,
+        buyer_move_in_window: hasBuyerProfile ? selectedContact.buyer_move_in_window : null,
+        buyer_country_details: hasBuyerProfile ? selectedContact.buyer_country_details : null,
+        tenant_target_locations: hasTenantProfile ? selectedContact.tenant_target_locations : null,
+        tenant_property_types: hasTenantProfile ? selectedContact.tenant_property_types : null,
+        tenant_budget_min: null,
+        tenant_budget_max: hasTenantProfile ? budgetValue : null,
+        tenant_bedrooms_min: hasTenantProfile ? selectedContact.tenant_bedrooms_min : null,
+        tenant_surface_min_m2: hasTenantProfile ? selectedContact.tenant_surface_min_m2 : null,
+        tenant_move_in_window: hasTenantProfile ? selectedContact.tenant_move_in_window : null,
+        tenant_country_details: hasTenantProfile ? selectedContact.tenant_country_details : null,
       })
       .eq("id", selectedContact.id)
       .eq("workspace_id", workspace.id)
@@ -941,6 +1411,12 @@ export default function CrmBoard() {
     }
 
     setContacts((previous) => previous.map((contact) => (contact.id === updated.id ? updated : contact)));
+    const savedFollowUpInput = formatDateOnly(updated.next_follow_up_at, "");
+    setSelectedFollowUpInput(savedFollowUpInput);
+    setContactDetailsDraftBaseline(
+      createContactDetailsDraftSnapshot(updated, savedFollowUpInput, assigneesByContact[selectedContact.id] ?? []),
+    );
+    setIsDiscardChangesDialogOpen(false);
     setSelectedFollowUpDateError(null);
     setMessage("Contact updated.");
     setIsSaving(false);
@@ -1052,6 +1528,130 @@ export default function CrmBoard() {
     setIsDeleteConfirmOpen(false);
     setDeletePhraseInput("");
     setIsDeleteFinalCheckEnabled(false);
+  }
+
+  function openContactDetails(contactId: string) {
+    const sourceContact = contacts.find((contact) => contact.id === contactId);
+    if (sourceContact) {
+      const followUpInput = formatDateOnly(sourceContact.next_follow_up_at, "");
+      const assigneeIds = assigneesByContact[contactId] ?? [];
+      setContactDetailsDraftBaseline(createContactDetailsDraftSnapshot(sourceContact, followUpInput, assigneeIds));
+    }
+
+    setSelectedContactId(contactId);
+    setIsContactDetailsOpen(true);
+    setIsDiscardChangesDialogOpen(false);
+  }
+
+  function closeContactDetails() {
+    setIsContactDetailsOpen(false);
+    setIsDiscardChangesDialogOpen(false);
+    setContactDetailsDraftBaseline(null);
+
+    if (searchParams.get("details") === "1") {
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete("details");
+      const nextQuery = nextParams.toString();
+      router.replace(nextQuery ? `/contacts?${nextQuery}` : "/contacts", { scroll: false });
+    }
+  }
+
+  function hasUnsavedContactDetailsChanges() {
+    if (!selectedContact || !contactDetailsDraftBaseline) {
+      return false;
+    }
+
+    const currentSnapshot = createContactDetailsDraftSnapshot(
+      selectedContact,
+      selectedFollowUpInput,
+      assigneesByContact[selectedContact.id] ?? [],
+    );
+
+    return !areContactDetailsDraftSnapshotsEqual(currentSnapshot, contactDetailsDraftBaseline);
+  }
+
+  useEffect(() => {
+    if (!isContactDetailsOpen || !selectedContact || !contactDetailsDraftBaseline || !areAssigneesLoaded) {
+      return;
+    }
+
+    const currentSnapshot = createContactDetailsDraftSnapshot(
+      selectedContact,
+      selectedFollowUpInput,
+      assigneesByContact[selectedContact.id] ?? [],
+    );
+
+    const sameContactPayload = JSON.stringify(currentSnapshot.contact) === JSON.stringify(contactDetailsDraftBaseline.contact);
+    const sameFollowUpInput = currentSnapshot.followUpInput === contactDetailsDraftBaseline.followUpInput;
+    const differentAssignees =
+      JSON.stringify(currentSnapshot.assigneeProfileIds) !== JSON.stringify(contactDetailsDraftBaseline.assigneeProfileIds);
+
+    if (sameContactPayload && sameFollowUpInput && differentAssignees) {
+      setContactDetailsDraftBaseline(currentSnapshot);
+    }
+  }, [
+    areAssigneesLoaded,
+    assigneesByContact,
+    contactDetailsDraftBaseline,
+    isContactDetailsOpen,
+    selectedContact,
+    selectedFollowUpInput,
+  ]);
+
+  function requestCloseContactDetails() {
+    if (hasUnsavedContactDetailsChanges()) {
+      setIsDiscardChangesDialogOpen(true);
+      return;
+    }
+
+    closeContactDetails();
+  }
+
+  function cancelDiscardContactDetailsChanges() {
+    setIsDiscardChangesDialogOpen(false);
+  }
+
+  function discardContactDetailsChangesAndClose() {
+    if (selectedContactId && contactDetailsDraftBaseline) {
+      const baselineContact = contactDetailsDraftBaseline.contact;
+
+      setContacts((previous) =>
+        previous.map((contact) =>
+          contact.id === selectedContactId
+            ? {
+                ...baselineContact,
+                contact_roles: baselineContact.contact_roles ? [...baselineContact.contact_roles] : null,
+                buyer_target_locations: baselineContact.buyer_target_locations
+                  ? [...baselineContact.buyer_target_locations]
+                  : null,
+                buyer_property_types: baselineContact.buyer_property_types
+                  ? [...baselineContact.buyer_property_types]
+                  : null,
+                tenant_target_locations: baselineContact.tenant_target_locations
+                  ? [...baselineContact.tenant_target_locations]
+                  : null,
+                tenant_property_types: baselineContact.tenant_property_types
+                  ? [...baselineContact.tenant_property_types]
+                  : null,
+                buyer_country_details: baselineContact.buyer_country_details
+                  ? { ...baselineContact.buyer_country_details }
+                  : null,
+                tenant_country_details: baselineContact.tenant_country_details
+                  ? { ...baselineContact.tenant_country_details }
+                  : null,
+              }
+            : contact,
+        ),
+      );
+      setSelectedFollowUpInput(contactDetailsDraftBaseline.followUpInput);
+      setSelectedFollowUpDateError(null);
+      setAssigneesByContact((previous) => ({
+        ...previous,
+        [selectedContactId]: [...contactDetailsDraftBaseline.assigneeProfileIds],
+      }));
+    }
+
+    closeContactDetails();
   }
 
   async function deleteSelectedContact() {
@@ -1216,6 +1816,138 @@ export default function CrmBoard() {
     );
   }
 
+  function toggleCreateRole(role: ContactRole) {
+    setContactForm((previous) => {
+      const hasRole = previous.contact_roles.includes(role);
+      const nextRoles = hasRole
+        ? previous.contact_roles.filter((candidate) => candidate !== role)
+        : [...previous.contact_roles, role];
+
+      if (nextRoles.length === 0) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        contact_roles: nextRoles,
+      };
+    });
+  }
+
+  function toggleSelectedContactRole(role: ContactRole) {
+    if (!selectedContactId) {
+      return;
+    }
+
+    setContacts((previous) =>
+      previous.map((contact) => {
+        if (contact.id !== selectedContactId) {
+          return contact;
+        }
+
+        const currentRoles = normalizeContactRoles(contact.contact_roles, contact.client_type);
+        const hasRole = currentRoles.includes(role);
+        const nextRoles = hasRole
+          ? currentRoles.filter((candidate) => candidate !== role)
+          : [...currentRoles, role];
+
+        if (nextRoles.length === 0) {
+          return contact;
+        }
+
+        const primaryRole = nextRoles[0] ?? contact.client_type;
+        const shouldKeepBudget = nextRoles.some((nextRole) => requiresBudget(nextRole));
+
+        return {
+          ...contact,
+          contact_roles: nextRoles,
+          client_type: primaryRole,
+          budget: shouldKeepBudget ? contact.budget : null,
+        };
+      }),
+    );
+  }
+
+  function toggleCreateBuyerPropertyType(value: ContactPropertyType) {
+    setContactForm((previous) => {
+      const hasValue = previous.buyer_property_types.includes(value);
+      return {
+        ...previous,
+        buyer_property_types: hasValue
+          ? previous.buyer_property_types.filter((type) => type !== value)
+          : [...previous.buyer_property_types, value],
+      };
+    });
+  }
+
+  function toggleSelectedBuyerPropertyType(value: ContactPropertyType) {
+    if (!selectedContact) {
+      return;
+    }
+
+    const current = Array.isArray(selectedContact.buyer_property_types)
+      ? (selectedContact.buyer_property_types as ContactPropertyType[])
+      : [];
+    const hasValue = current.includes(value);
+
+    updateSelectedContact(
+      "buyer_property_types",
+      (hasValue ? current.filter((type) => type !== value) : [...current, value]) as CrmContact["buyer_property_types"],
+    );
+  }
+
+  function toggleCreateTenantPropertyType(value: ContactPropertyType) {
+    setContactForm((previous) => {
+      const hasValue = previous.tenant_property_types.includes(value);
+      return {
+        ...previous,
+        tenant_property_types: hasValue
+          ? previous.tenant_property_types.filter((type) => type !== value)
+          : [...previous.tenant_property_types, value],
+      };
+    });
+  }
+
+  function toggleSelectedTenantPropertyType(value: ContactPropertyType) {
+    if (!selectedContact) {
+      return;
+    }
+
+    const current = Array.isArray(selectedContact.tenant_property_types)
+      ? (selectedContact.tenant_property_types as ContactPropertyType[])
+      : [];
+    const hasValue = current.includes(value);
+
+    updateSelectedContact(
+      "tenant_property_types",
+      (hasValue ? current.filter((type) => type !== value) : [...current, value]) as CrmContact["tenant_property_types"],
+    );
+  }
+
+  function applyCreateFollowUpPreset(days: number) {
+    const presetValue = formatDateAsInputValue(addDays(new Date(), days));
+    setContactForm((previous) => ({
+      ...previous,
+      next_follow_up_at: presetValue,
+    }));
+    setContactFollowUpDateError(null);
+  }
+
+  function applySelectedFollowUpPreset(days: number) {
+    const presetValue = formatDateAsInputValue(addDays(new Date(), days));
+    setSelectedFollowUpInput(presetValue);
+    setSelectedFollowUpDateError(null);
+  }
+
+  function applyTimelineDueDatePreset(days: number) {
+    const presetValue = formatDateAsInputValue(addDays(new Date(), days));
+    setTimelineForm((previous) => ({
+      ...previous,
+      due_date: presetValue,
+    }));
+    setTimelineDueDateError(null);
+  }
+
   function toggleCreateAssignee(profileId: string) {
     setContactForm((previous) => {
       const hasAssignee = previous.assignee_profile_ids.includes(profileId);
@@ -1377,9 +2109,9 @@ export default function CrmBoard() {
   return (
     <section className="crm-surface flex min-h-full flex-col gap-6">
       <div className="overflow-hidden rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] shadow-sm">
-        <div className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-900 px-6 py-4 text-white">
+        <div className="bg-gradient-to-r from-slate-900 via-blue-900 to-slate-900 px-6 py-3 text-white">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-100">CRM Cockpit</p>
-          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_240px] md:items-end">
+          <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_240px] md:items-end">
             <p className="text-sm text-blue-100/90">
               Workspace-scoped CRM with Kanban stages, summaries, and live interaction timelines.
             </p>
@@ -1390,7 +2122,7 @@ export default function CrmBoard() {
                   value={workspace?.id ?? ""}
                   onChange={(event) => void handleWorkspaceScopeChange(event.target.value)}
                   disabled={isSwitchingWorkspace || isAccessibleWorkspacesLoading}
-                  className="rounded-xl border border-white/30 bg-white/10 px-3 py-2 text-sm font-medium normal-case tracking-normal text-white outline-none transition hover:bg-white/15"
+                  className="rounded-xl border border-white/30 bg-white/10 px-3 py-1.5 text-sm font-medium normal-case tracking-normal text-white outline-none transition hover:bg-white/15"
                 >
                   {(accessibleWorkspaces.length > 0 ? accessibleWorkspaces : workspace ? [{ workspace_id: workspace.id, workspace_name: workspace.name, company_id: workspace.company_id, company_name: workspace.company_name, user_role: "agent", is_current: true }] : []).map((item) => (
                     <option key={item.workspace_id} value={item.workspace_id} className="text-slate-900">
@@ -1399,7 +2131,7 @@ export default function CrmBoard() {
                   ))}
                 </select>
               ) : (
-                <div className="rounded-xl border border-white/30 bg-white/10 px-3 py-2 text-sm font-medium normal-case tracking-normal text-white">
+                <div className="rounded-xl border border-white/30 bg-white/10 px-3 py-1.5 text-sm font-medium normal-case tracking-normal text-white">
                   {workspace?.name ?? "Current workspace"}
                 </div>
               )}
@@ -1443,17 +2175,6 @@ export default function CrmBoard() {
               />
               High-priority only
             </label>
-            {isEmailFeatureEnabled ? (
-              <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
-                <input
-                  type="checkbox"
-                  checked={onlyEmailSummaries}
-                  onChange={(event) => setOnlyEmailSummaries(event.target.checked)}
-                  className="h-4 w-4"
-                />
-                Email summaries only
-              </label>
-            ) : null}
           </div>
         </div>
 
@@ -1497,58 +2218,28 @@ export default function CrmBoard() {
                 className="w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
               />
             </label>
-            <label className="min-w-0 md:col-span-2 xl:col-span-2 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
-              Budget and currency
-              <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-2">
-                <input
-                  value={contactForm.budget}
-                  onChange={(event) => setContactForm((previous) => ({ ...previous, budget: event.target.value }))}
-                  placeholder={
-                    requiresBudget(contactForm.client_type)
-                      ? `Budget (${contactForm.currency})`
-                      : "Not needed for seller/tenant"
-                  }
-                  inputMode="decimal"
-                  disabled={!requiresBudget(contactForm.client_type)}
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
-                />
-                <select
-                  value={contactForm.currency}
-                  onChange={(event) => setContactForm((previous) => ({ ...previous, currency: event.target.value }))}
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-3 text-sm outline-none focus:border-[var(--accent)]"
-                  aria-label="Budget currency"
-                >
-                  {CURRENCY_OPTIONS.map((currency) => (
-                    <option key={currency} value={currency}>
-                      {currency}
-                    </option>
-                  ))}
-                </select>
+            <div className="min-w-0 md:col-span-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Contact roles</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {CONTACT_ROLE_OPTIONS.map((role) => {
+                  const isSelected = contactForm.contact_roles.includes(role);
+                  return (
+                    <button
+                      key={role}
+                      type="button"
+                      onClick={() => toggleCreateRole(role)}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] leading-none transition ${
+                        isSelected
+                          ? "border-blue-400 bg-blue-50 text-blue-700"
+                          : "border-[var(--border)] bg-white text-[var(--muted)] hover:bg-slate-50"
+                      }`}
+                    >
+                      {formatRoleLabel(role)}
+                    </button>
+                  );
+                })}
               </div>
-            </label>
-            <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
-              Client type
-              <select
-                value={contactForm.client_type}
-                onChange={(event) => {
-                  const nextType = event.target.value as ClientType;
-                  setContactForm((previous) => ({
-                    ...previous,
-                    client_type: nextType,
-                    budget: requiresBudget(nextType) ? previous.budget : "",
-                  }));
-                }}
-                className="w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
-              >
-                <option value="buyer">Buyer</option>
-                <option value="seller">Seller</option>
-                <option value="tenant">Tenant</option>
-                <option value="landlord">Landlord</option>
-                <option value="investor">Investor</option>
-                <option value="vendor">Vendor</option>
-                <option value="other">Other</option>
-              </select>
-            </label>
+            </div>
             <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
               Priority
               <select
@@ -1626,6 +2317,18 @@ export default function CrmBoard() {
             </label>
             <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
               Next follow-up date
+              <div className="flex flex-wrap gap-1.5">
+                {FOLLOW_UP_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => applyCreateFollowUpPreset(preset.days)}
+                    className="rounded-full border border-[var(--border)] bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)] hover:bg-slate-50"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
               <input
                 value={contactForm.next_follow_up_at}
                 onChange={(event) => {
@@ -1640,6 +2343,260 @@ export default function CrmBoard() {
               />
               {contactFollowUpDateError ? <span className="text-[11px] text-red-600">{contactFollowUpDateError}</span> : null}
             </label>
+            {hasBuyerRole(contactForm.contact_roles) ? (
+              <div className="md:col-span-2 xl:col-span-4 rounded-xl border border-[var(--border)] bg-white px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Buyer details</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <input
+                    value={contactForm.buyer_target_locations}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, buyer_target_locations: event.target.value }))
+                    }
+                    placeholder="Where to buy (cities/areas)"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)] xl:col-span-2"
+                  />
+                  <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-2 sm:col-span-2 xl:col-span-2">
+                    <input
+                      value={contactForm.budget}
+                      onChange={(event) => setContactForm((previous) => ({ ...previous, budget: event.target.value }))}
+                      placeholder={`Budget (${contactForm.currency})`}
+                      inputMode="decimal"
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                    />
+                    <select
+                      value={contactForm.currency}
+                      onChange={(event) => setContactForm((previous) => ({ ...previous, currency: event.target.value }))}
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                      aria-label="Budget currency"
+                    >
+                      {CURRENCY_OPTIONS.map((currency) => (
+                        <option key={currency} value={currency}>
+                          {currency}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={contactForm.buyer_wants_garden}
+                      onChange={(event) =>
+                        setContactForm((previous) => ({ ...previous, buyer_wants_garden: event.target.checked }))
+                      }
+                      className="h-4 w-4"
+                    />
+                    Wants garden
+                  </label>
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={contactForm.buyer_wants_balcony}
+                      onChange={(event) =>
+                        setContactForm((previous) => ({ ...previous, buyer_wants_balcony: event.target.checked }))
+                      }
+                      className="h-4 w-4"
+                    />
+                    Wants balcony
+                  </label>
+                  <input
+                    value={contactForm.buyer_bedrooms_min}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, buyer_bedrooms_min: event.target.value }))
+                    }
+                    placeholder="Min bedrooms"
+                    inputMode="numeric"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.buyer_surface_min_m2}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, buyer_surface_min_m2: event.target.value }))
+                    }
+                    placeholder="Min surface (m2)"
+                    inputMode="decimal"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.buyer_move_in_window}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, buyer_move_in_window: event.target.value }))
+                    }
+                    placeholder="Move-in window"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.buyer_floor_wanted}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, buyer_floor_wanted: event.target.value }))
+                    }
+                    placeholder="Preferred floor (e.g. 2nd, 3rd+)"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.buyer_floor_avoid}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, buyer_floor_avoid: event.target.value }))
+                    }
+                    placeholder="Avoid floor (e.g. ground, top)"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.buyer_country_notes}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, buyer_country_notes: event.target.value }))
+                    }
+                    placeholder="Country-specific notes"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {CONTACT_PROPERTY_TYPE_OPTIONS.map((propertyType) => {
+                    const isSelected = contactForm.buyer_property_types.includes(propertyType);
+                    return (
+                      <button
+                        key={propertyType}
+                        type="button"
+                        onClick={() => toggleCreateBuyerPropertyType(propertyType)}
+                        className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] leading-none transition ${
+                          isSelected
+                            ? "border-emerald-400 bg-emerald-50 text-emerald-700"
+                            : "border-[var(--border)] bg-white text-[var(--muted)] hover:bg-slate-50"
+                        }`}
+                      >
+                        {formatPropertyTypeLabel(propertyType)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {hasTenantRole(contactForm.contact_roles) ? (
+              <div className="md:col-span-2 xl:col-span-4 rounded-xl border border-[var(--border)] bg-white px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Tenant details</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <input
+                    value={contactForm.tenant_target_locations}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, tenant_target_locations: event.target.value }))
+                    }
+                    placeholder="Where to rent (cities/areas)"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)] xl:col-span-2"
+                  />
+                  <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-2 sm:col-span-2 xl:col-span-2">
+                    <input
+                      value={contactForm.budget}
+                      onChange={(event) => setContactForm((previous) => ({ ...previous, budget: event.target.value }))}
+                      placeholder={`Budget (${contactForm.currency})`}
+                      inputMode="decimal"
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                    />
+                    <select
+                      value={contactForm.currency}
+                      onChange={(event) => setContactForm((previous) => ({ ...previous, currency: event.target.value }))}
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                      aria-label="Budget currency"
+                    >
+                      {CURRENCY_OPTIONS.map((currency) => (
+                        <option key={`tenant-${currency}`} value={currency}>
+                          {currency}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={contactForm.tenant_wants_garden}
+                      onChange={(event) =>
+                        setContactForm((previous) => ({ ...previous, tenant_wants_garden: event.target.checked }))
+                      }
+                      className="h-4 w-4"
+                    />
+                    Wants garden
+                  </label>
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={contactForm.tenant_wants_balcony}
+                      onChange={(event) =>
+                        setContactForm((previous) => ({ ...previous, tenant_wants_balcony: event.target.checked }))
+                      }
+                      className="h-4 w-4"
+                    />
+                    Wants balcony
+                  </label>
+                  <input
+                    value={contactForm.tenant_bedrooms_min}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, tenant_bedrooms_min: event.target.value }))
+                    }
+                    placeholder="Min bedrooms"
+                    inputMode="numeric"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.tenant_surface_min_m2}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, tenant_surface_min_m2: event.target.value }))
+                    }
+                    placeholder="Min surface (m2)"
+                    inputMode="decimal"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.tenant_move_in_window}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, tenant_move_in_window: event.target.value }))
+                    }
+                    placeholder="Move-in window"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.tenant_floor_wanted}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, tenant_floor_wanted: event.target.value }))
+                    }
+                    placeholder="Preferred floor (e.g. 2nd, 3rd+)"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.tenant_floor_avoid}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, tenant_floor_avoid: event.target.value }))
+                    }
+                    placeholder="Avoid floor (e.g. ground, top)"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    value={contactForm.tenant_country_notes}
+                    onChange={(event) =>
+                      setContactForm((previous) => ({ ...previous, tenant_country_notes: event.target.value }))
+                    }
+                    placeholder="Country-specific notes"
+                    className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {CONTACT_PROPERTY_TYPE_OPTIONS.map((propertyType) => {
+                    const isSelected = contactForm.tenant_property_types.includes(propertyType);
+                    return (
+                      <button
+                        key={`tenant-${propertyType}`}
+                        type="button"
+                        onClick={() => toggleCreateTenantPropertyType(propertyType)}
+                        className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] leading-none transition ${
+                          isSelected
+                            ? "border-indigo-400 bg-indigo-50 text-indigo-700"
+                            : "border-[var(--border)] bg-white text-[var(--muted)] hover:bg-slate-50"
+                        }`}
+                      >
+                        {formatPropertyTypeLabel(propertyType)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             <textarea
               value={contactForm.notes}
               onChange={(event) => setContactForm((previous) => ({ ...previous, notes: event.target.value }))}
@@ -1694,7 +2651,11 @@ export default function CrmBoard() {
                         type="button"
                         draggable
                         onDragStart={() => setDraggedContactId(contact.id)}
-                        onClick={() => setSelectedContactId(contact.id)}
+                        onClick={() => {
+                          setSelectedContactId(contact.id);
+                          setIsContactDetailsOpen(false);
+                        }}
+                        onDoubleClick={() => openContactDetails(contact.id)}
                         className={`w-full rounded-xl border px-3 py-3 text-left transition ${
                           selectedContactId === contact.id
                             ? "border-blue-500 bg-blue-50"
@@ -1703,7 +2664,11 @@ export default function CrmBoard() {
                       >
                         <p className="text-sm font-semibold text-[var(--foreground)]">{getContactName(contact)}</p>
                         <div className="mt-1 flex items-center justify-between gap-2">
-                          <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">{contact.client_type}</p>
+                          <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
+                            {normalizeContactRoles(contact.contact_roles, contact.client_type)
+                              .map((role) => formatRoleLabel(role))
+                              .join(" / ")}
+                          </p>
                           <span
                             className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${getPriorityBadgeClasses(contact.priority)}`}
                           >
@@ -1728,6 +2693,141 @@ export default function CrmBoard() {
         </div>
 
         <aside className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] p-4">
+          {!selectedContact ? (
+            <p className="text-sm text-[var(--muted)]">
+              Click a contact card once to show its timeline here. Double click to open full contact details.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+                  Timeline for {getContactName(selectedContact)}
+                </p>
+                {isEmailFeatureEnabled ? (
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={onlyEmailSummaries}
+                      onChange={(event) => setOnlyEmailSummaries(event.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    Email summaries only
+                  </label>
+                ) : null}
+              </div>
+              <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-white p-3 sm:grid-cols-2 lg:grid-cols-4">
+                <input
+                  type="search"
+                  value={timelineSearchQuery}
+                  onChange={(event) => setTimelineSearchQuery(event.target.value)}
+                  placeholder="Search timeline"
+                  className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)] sm:col-span-2 lg:col-span-2"
+                />
+                <select
+                  value={timelineEventTypeFilter}
+                  onChange={(event) => setTimelineEventTypeFilter(event.target.value as TimelineEventTypeFilter)}
+                  className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  aria-label="Filter timeline by type"
+                >
+                  {TIMELINE_EVENT_FILTER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                  <input
+                    type="checkbox"
+                    checked={timelineOnlyWithDueDate}
+                    onChange={(event) => setTimelineOnlyWithDueDate(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Due only
+                </label>
+                <input
+                  value={timelineFromDate}
+                  onChange={(event) => setTimelineFromDate(event.target.value)}
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="From (dd/mm/yyyy)"
+                  className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
+                />
+                <input
+                  value={timelineToDate}
+                  onChange={(event) => setTimelineToDate(event.target.value)}
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="To (dd/mm/yyyy)"
+                  className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
+                />
+              </div>
+              <div className="overflow-x-auto pb-2">
+                <div className="flex min-w-max gap-3">
+                  {filteredEvents.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-[var(--border)] px-3 py-4 text-center text-xs text-[var(--muted)]">
+                      No timeline events match your filters.
+                    </p>
+                  ) : (
+                    filteredEvents.map((timelineEvent) => (
+                      <article
+                        key={`horizontal-${timelineEvent.id}`}
+                        className="w-[290px] shrink-0 rounded-xl border border-[var(--border)] bg-white px-3 py-3"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-semibold text-[var(--foreground)]">{timelineEvent.title}</p>
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                            {timelineEvent.event_type}
+                          </span>
+                        </div>
+                        {timelineEvent.body ? (
+                          <p className="mt-1 text-sm leading-6 text-[var(--muted)] line-clamp-4">
+                            {timelineEvent.event_type === "status_change"
+                              ? formatStatusChangeBody(timelineEvent)
+                              : timelineEvent.body}
+                          </p>
+                        ) : null}
+                        {getTimelineEventDueDate(timelineEvent) ? (
+                          <p className="mt-2 text-xs font-medium text-[var(--muted)]">
+                            Due: {formatDateOnly(getTimelineEventDueDate(timelineEvent))}
+                          </p>
+                        ) : null}
+                        <p className="mt-2 text-xs text-[var(--muted)]">{formatDateTime(timelineEvent.occurred_at)}</p>
+                        <p className="text-[11px] text-[var(--muted)]">
+                          By {getEventActorLabel(timelineEvent, workspaceMemberNameById)}
+                        </p>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </aside>
+
+        {isContactDetailsOpen ? (
+          <button
+            type="button"
+            aria-label="Close contact details"
+            onClick={requestCloseContactDetails}
+            className="fixed inset-0 z-40 bg-slate-950/45"
+          />
+        ) : null}
+
+        <aside
+          className={`${isContactDetailsOpen ? "fixed left-1/2 top-4 z-50 max-h-[92vh] w-[min(1120px,calc(100vw-1.5rem))] -translate-x-1/2 overflow-y-auto rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] p-4 shadow-2xl" : "hidden"}`}
+        >
+          <div className="mb-3 flex items-center justify-between gap-2 border-b border-[var(--border)] pb-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+              Contact details
+            </p>
+            <button
+              type="button"
+              onClick={requestCloseContactDetails}
+              className="rounded-lg border border-[var(--border)] bg-white px-2.5 py-1 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+            >
+              Close
+            </button>
+          </div>
           {!selectedContact ? (
             <p className="text-sm text-[var(--muted)]">Pick a contact card to open profile details and timeline.</p>
           ) : (
@@ -1773,60 +2873,31 @@ export default function CrmBoard() {
                     placeholder="Address"
                     className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
                   />
-                  <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
-                    Budget and currency
-                    <div className="grid grid-cols-[minmax(0,1fr)_88px] gap-2">
-                      <input
-                        value={selectedContact.budget ?? ""}
-                        onChange={(event) => updateSelectedContact("budget", event.target.value ? Number(event.target.value) : null)}
-                        placeholder={
-                          requiresBudget(selectedContact.client_type)
-                            ? `Budget (${selectedContact.currency})`
-                            : "Not needed for seller/tenant"
-                        }
-                        inputMode="decimal"
-                        disabled={!requiresBudget(selectedContact.client_type)}
-                        className="w-full rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                      />
-                      <select
-                        value={selectedContact.currency}
-                        onChange={(event) => updateSelectedContact("currency", event.target.value)}
-                        className="w-full rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                        aria-label="Budget currency"
-                      >
-                        {CURRENCY_OPTIONS.map((currency) => (
-                          <option key={currency} value={currency}>
-                            {currency}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </label>
-
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
-                      Client type
-                      <select
-                        value={selectedContact.client_type}
-                        onChange={(event) => {
-                          const nextType = event.target.value as ClientType;
-                          updateSelectedContact("client_type", nextType);
+                    <div className="min-w-0 sm:col-span-2 xl:col-span-3 rounded-xl border border-[var(--border)] bg-white px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Contact roles</p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        {CONTACT_ROLE_OPTIONS.map((role) => {
+                          const selectedRoles = normalizeContactRoles(selectedContact.contact_roles, selectedContact.client_type);
+                          const isSelected = selectedRoles.includes(role);
 
-                          if (!requiresBudget(nextType)) {
-                            updateSelectedContact("budget", null);
-                          }
-                        }}
-                        className="w-full rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                      >
-                        <option value="buyer">Buyer</option>
-                        <option value="seller">Seller</option>
-                        <option value="tenant">Tenant</option>
-                        <option value="landlord">Landlord</option>
-                        <option value="investor">Investor</option>
-                        <option value="vendor">Vendor</option>
-                        <option value="other">Other</option>
-                      </select>
-                    </label>
+                          return (
+                            <button
+                              key={role}
+                              type="button"
+                              onClick={() => toggleSelectedContactRole(role)}
+                              className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] leading-none transition ${
+                                isSelected
+                                  ? "border-blue-400 bg-blue-50 text-blue-700"
+                                  : "border-[var(--border)] bg-white text-[var(--muted)] hover:bg-slate-50"
+                              }`}
+                            >
+                              {formatRoleLabel(role)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
 
                     <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
                       Priority
@@ -1905,23 +2976,301 @@ export default function CrmBoard() {
                         className="w-full rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
                       />
                     </label>
-                    <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
-                      Next follow-up date
-                      <input
-                        value={selectedFollowUpInput}
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setSelectedFollowUpInput(nextValue);
-                          setSelectedFollowUpDateError(getDisplayDateError(nextValue));
-                        }}
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="dd/mm/yyyy"
-                        className="w-full rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
-                      />
-                      {selectedFollowUpDateError ? <span className="text-[11px] text-red-600">{selectedFollowUpDateError}</span> : null}
-                    </label>
                   </div>
+                  {hasBuyerRole(normalizeContactRoles(selectedContact.contact_roles, selectedContact.client_type)) ? (
+                    <div className="rounded-xl border border-[var(--border)] bg-white px-3 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Buyer details</p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        <input
+                          value={listToInputValue(selectedContact.buyer_target_locations)}
+                          onChange={(event) =>
+                            updateSelectedContact("buyer_target_locations", parseCommaSeparatedList(event.target.value))
+                          }
+                          placeholder="Where to buy (cities/areas)"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)] xl:col-span-2"
+                        />
+                        <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-2 sm:col-span-2 xl:col-span-2">
+                          <input
+                            value={selectedContact.budget ?? ""}
+                            onChange={(event) => updateSelectedContact("budget", event.target.value ? Number(event.target.value) : null)}
+                            placeholder={`Budget (${selectedContact.currency})`}
+                            inputMode="decimal"
+                            className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                          />
+                          <select
+                            value={selectedContact.currency}
+                            onChange={(event) => updateSelectedContact("currency", event.target.value)}
+                            className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                            aria-label="Budget currency"
+                          >
+                            {CURRENCY_OPTIONS.map((currency) => (
+                              <option key={`buyer-edit-${currency}`} value={currency}>
+                                {currency}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                          <input
+                            type="checkbox"
+                            checked={getCountryDetailBoolean(selectedContact.buyer_country_details, "wants_garden")}
+                            onChange={(event) =>
+                              updateSelectedContact(
+                                "buyer_country_details",
+                                patchCountryDetails(selectedContact.buyer_country_details, {
+                                  wants_garden: event.target.checked,
+                                }),
+                              )
+                            }
+                            className="h-4 w-4"
+                          />
+                          Wants garden
+                        </label>
+                        <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                          <input
+                            type="checkbox"
+                            checked={getCountryDetailBoolean(selectedContact.buyer_country_details, "wants_balcony")}
+                            onChange={(event) =>
+                              updateSelectedContact(
+                                "buyer_country_details",
+                                patchCountryDetails(selectedContact.buyer_country_details, {
+                                  wants_balcony: event.target.checked,
+                                }),
+                              )
+                            }
+                            className="h-4 w-4"
+                          />
+                          Wants balcony
+                        </label>
+                        <input
+                          value={selectedContact.buyer_bedrooms_min ?? ""}
+                          onChange={(event) => updateSelectedContact("buyer_bedrooms_min", toNumberOrNull(event.target.value))}
+                          placeholder="Min bedrooms"
+                          inputMode="numeric"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={selectedContact.buyer_surface_min_m2 ?? ""}
+                          onChange={(event) => updateSelectedContact("buyer_surface_min_m2", toNumberOrNull(event.target.value))}
+                          placeholder="Min surface (m2)"
+                          inputMode="decimal"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={selectedContact.buyer_move_in_window ?? ""}
+                          onChange={(event) => updateSelectedContact("buyer_move_in_window", event.target.value || null)}
+                          placeholder="Move-in window"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={getCountryDetailString(selectedContact.buyer_country_details, "preferred_floor")}
+                          onChange={(event) =>
+                            updateSelectedContact(
+                              "buyer_country_details",
+                              patchCountryDetails(selectedContact.buyer_country_details, {
+                                preferred_floor: event.target.value,
+                              }),
+                            )
+                          }
+                          placeholder="Preferred floor (e.g. 2nd, 3rd+)"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={getCountryDetailString(selectedContact.buyer_country_details, "avoid_floor")}
+                          onChange={(event) =>
+                            updateSelectedContact(
+                              "buyer_country_details",
+                              patchCountryDetails(selectedContact.buyer_country_details, {
+                                avoid_floor: event.target.value,
+                              }),
+                            )
+                          }
+                          placeholder="Avoid floor (e.g. ground, top)"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={getCountryDetailString(selectedContact.buyer_country_details, "notes")}
+                          onChange={(event) =>
+                            updateSelectedContact(
+                              "buyer_country_details",
+                              patchCountryDetails(selectedContact.buyer_country_details, {
+                                notes: event.target.value,
+                              }),
+                            )
+                          }
+                          placeholder="Country-specific notes"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {CONTACT_PROPERTY_TYPE_OPTIONS.map((propertyType) => {
+                          const selectedPropertyTypes = (selectedContact.buyer_property_types ?? []) as ContactPropertyType[];
+                          const isSelected = selectedPropertyTypes.includes(propertyType);
+                          return (
+                            <button
+                              key={propertyType}
+                              type="button"
+                              onClick={() => toggleSelectedBuyerPropertyType(propertyType)}
+                              className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] leading-none transition ${
+                                isSelected
+                                  ? "border-emerald-400 bg-emerald-50 text-emerald-700"
+                                  : "border-[var(--border)] bg-white text-[var(--muted)] hover:bg-slate-50"
+                              }`}
+                            >
+                              {formatPropertyTypeLabel(propertyType)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {hasTenantRole(normalizeContactRoles(selectedContact.contact_roles, selectedContact.client_type)) ? (
+                    <div className="rounded-xl border border-[var(--border)] bg-white px-3 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Tenant details</p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        <input
+                          value={listToInputValue(selectedContact.tenant_target_locations)}
+                          onChange={(event) =>
+                            updateSelectedContact("tenant_target_locations", parseCommaSeparatedList(event.target.value))
+                          }
+                          placeholder="Where to rent (cities/areas)"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)] xl:col-span-2"
+                        />
+                        <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-2 sm:col-span-2 xl:col-span-2">
+                          <input
+                            value={selectedContact.budget ?? ""}
+                            onChange={(event) => updateSelectedContact("budget", event.target.value ? Number(event.target.value) : null)}
+                            placeholder={`Budget (${selectedContact.currency})`}
+                            inputMode="decimal"
+                            className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                          />
+                          <select
+                            value={selectedContact.currency}
+                            onChange={(event) => updateSelectedContact("currency", event.target.value)}
+                            className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                            aria-label="Budget currency"
+                          >
+                            {CURRENCY_OPTIONS.map((currency) => (
+                              <option key={`tenant-edit-${currency}`} value={currency}>
+                                {currency}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                          <input
+                            type="checkbox"
+                            checked={getCountryDetailBoolean(selectedContact.tenant_country_details, "wants_garden")}
+                            onChange={(event) =>
+                              updateSelectedContact(
+                                "tenant_country_details",
+                                patchCountryDetails(selectedContact.tenant_country_details, {
+                                  wants_garden: event.target.checked,
+                                }),
+                              )
+                            }
+                            className="h-4 w-4"
+                          />
+                          Wants garden
+                        </label>
+                        <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                          <input
+                            type="checkbox"
+                            checked={getCountryDetailBoolean(selectedContact.tenant_country_details, "wants_balcony")}
+                            onChange={(event) =>
+                              updateSelectedContact(
+                                "tenant_country_details",
+                                patchCountryDetails(selectedContact.tenant_country_details, {
+                                  wants_balcony: event.target.checked,
+                                }),
+                              )
+                            }
+                            className="h-4 w-4"
+                          />
+                          Wants balcony
+                        </label>
+                        <input
+                          value={selectedContact.tenant_bedrooms_min ?? ""}
+                          onChange={(event) => updateSelectedContact("tenant_bedrooms_min", toNumberOrNull(event.target.value))}
+                          placeholder="Min bedrooms"
+                          inputMode="numeric"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={selectedContact.tenant_surface_min_m2 ?? ""}
+                          onChange={(event) => updateSelectedContact("tenant_surface_min_m2", toNumberOrNull(event.target.value))}
+                          placeholder="Min surface (m2)"
+                          inputMode="decimal"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={selectedContact.tenant_move_in_window ?? ""}
+                          onChange={(event) => updateSelectedContact("tenant_move_in_window", event.target.value || null)}
+                          placeholder="Move-in window"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={getCountryDetailString(selectedContact.tenant_country_details, "preferred_floor")}
+                          onChange={(event) =>
+                            updateSelectedContact(
+                              "tenant_country_details",
+                              patchCountryDetails(selectedContact.tenant_country_details, {
+                                preferred_floor: event.target.value,
+                              }),
+                            )
+                          }
+                          placeholder="Preferred floor (e.g. 2nd, 3rd+)"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={getCountryDetailString(selectedContact.tenant_country_details, "avoid_floor")}
+                          onChange={(event) =>
+                            updateSelectedContact(
+                              "tenant_country_details",
+                              patchCountryDetails(selectedContact.tenant_country_details, {
+                                avoid_floor: event.target.value,
+                              }),
+                            )
+                          }
+                          placeholder="Avoid floor (e.g. ground, top)"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <input
+                          value={getCountryDetailString(selectedContact.tenant_country_details, "notes")}
+                          onChange={(event) =>
+                            updateSelectedContact(
+                              "tenant_country_details",
+                              patchCountryDetails(selectedContact.tenant_country_details, {
+                                notes: event.target.value,
+                              }),
+                            )
+                          }
+                          placeholder="Country-specific notes"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {CONTACT_PROPERTY_TYPE_OPTIONS.map((propertyType) => {
+                          const selectedPropertyTypes = (selectedContact.tenant_property_types ?? []) as ContactPropertyType[];
+                          const isSelected = selectedPropertyTypes.includes(propertyType);
+                          return (
+                            <button
+                              key={`tenant-edit-${propertyType}`}
+                              type="button"
+                              onClick={() => toggleSelectedTenantPropertyType(propertyType)}
+                              className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] leading-none transition ${
+                                isSelected
+                                  ? "border-indigo-400 bg-indigo-50 text-indigo-700"
+                                  : "border-[var(--border)] bg-white text-[var(--muted)] hover:bg-slate-50"
+                              }`}
+                            >
+                              {formatPropertyTypeLabel(propertyType)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                   <textarea
                     value={selectedContact.notes ?? ""}
                     onChange={(event) => updateSelectedContact("notes", event.target.value || null)}
@@ -2011,55 +3360,79 @@ export default function CrmBoard() {
               <div className="space-y-4">
                 <div className="space-y-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Log interaction</p>
-                  <form onSubmit={handleCreateInteraction} className="grid gap-2">
-                    <select
-                      value={timelineForm.event_type}
-                      onChange={(event) =>
-                        setTimelineForm((previous) => ({
-                          ...previous,
-                          event_type: event.target.value as TimelineFormState["event_type"],
-                        }))
-                      }
-                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                    >
-                      <option value="note">Note</option>
-                      <option value="call">Call</option>
-                      <option value="email">Email</option>
-                      <option value="meeting">Meeting</option>
-                      <option value="visit">Visit</option>
-                    </select>
-                    <input
-                      value={timelineForm.title}
-                      onChange={(event) => setTimelineForm((previous) => ({ ...previous, title: event.target.value }))}
-                      placeholder="Title"
-                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                    />
-                    <textarea
-                      value={timelineForm.body}
-                      onChange={(event) => setTimelineForm((previous) => ({ ...previous, body: event.target.value }))}
-                      rows={2}
-                      placeholder="What happened?"
-                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-                    />
-                    <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
-                      Due or reminder date
-                      <input
-                        value={timelineForm.due_date}
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setTimelineForm((previous) => ({
-                            ...previous,
-                            due_date: nextValue,
-                          }));
-                          setTimelineDueDateError(getDisplayDateError(nextValue));
-                        }}
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="dd/mm/yyyy"
-                        className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
-                      />
-                      {timelineDueDateError ? <span className="text-[11px] text-red-600">{timelineDueDateError}</span> : null}
-                    </label>
+                  <form onSubmit={handleCreateInteraction} className="grid gap-3">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-white p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Interaction</p>
+                        <select
+                          value={timelineForm.event_type}
+                          onChange={(event) =>
+                            setTimelineForm((previous) => ({
+                              ...previous,
+                              event_type: event.target.value as TimelineFormState["event_type"],
+                            }))
+                          }
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        >
+                          <option value="note">Note</option>
+                          <option value="call">Call</option>
+                          <option value="email">Email</option>
+                          <option value="meeting">Meeting</option>
+                          <option value="visit">Visit</option>
+                        </select>
+                        <input
+                          value={timelineForm.title}
+                          onChange={(event) => setTimelineForm((previous) => ({ ...previous, title: event.target.value }))}
+                          placeholder="Title"
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                      </div>
+
+                      <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-white p-3">
+                        <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
+                          Next follow-up date
+                          <div className="flex flex-wrap gap-1.5">
+                            {FOLLOW_UP_PRESETS.map((preset) => (
+                              <button
+                                key={`timeline-${preset.label}`}
+                                type="button"
+                                onClick={() => applyTimelineDueDatePreset(preset.days)}
+                                className="rounded-full border border-[var(--border)] bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)] hover:bg-slate-50"
+                              >
+                                {preset.label}
+                              </button>
+                            ))}
+                          </div>
+                          <input
+                            value={timelineForm.due_date}
+                            onChange={(event) => {
+                              const nextValue = event.target.value;
+                              setTimelineForm((previous) => ({
+                                ...previous,
+                                due_date: nextValue,
+                              }));
+                              setTimelineDueDateError(getDisplayDateError(nextValue));
+                            }}
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="dd/mm/yyyy"
+                            className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
+                          />
+                        </label>
+                        <label className="min-w-0 flex flex-col gap-1 text-xs font-medium text-[var(--muted)]">
+                          Follow-up note
+                          <textarea
+                            value={timelineForm.body}
+                            onChange={(event) => setTimelineForm((previous) => ({ ...previous, body: event.target.value }))}
+                            rows={3}
+                            placeholder="What should happen on this follow-up?"
+                            className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    {timelineDueDateError ? <span className="text-[11px] text-red-600">{timelineDueDateError}</span> : null}
                     <button
                       type="submit"
                       disabled={isSaving}
@@ -2071,10 +3444,66 @@ export default function CrmBoard() {
                 </div>
 
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Timeline</p>
-                  <p className="text-xs text-[var(--muted)]">
-                    Next follow-up: {formatDateOnly(selectedContact.next_follow_up_at)}
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Timeline</p>
+                    {isEmailFeatureEnabled ? (
+                      <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                        <input
+                          type="checkbox"
+                          checked={onlyEmailSummaries}
+                          onChange={(event) => setOnlyEmailSummaries(event.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        Email summaries only
+                      </label>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-white p-3 sm:grid-cols-2">
+                    <input
+                      type="search"
+                      value={timelineSearchQuery}
+                      onChange={(event) => setTimelineSearchQuery(event.target.value)}
+                      placeholder="Search timeline text"
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)] sm:col-span-2"
+                    />
+                    <select
+                      value={timelineEventTypeFilter}
+                      onChange={(event) => setTimelineEventTypeFilter(event.target.value as TimelineEventTypeFilter)}
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                      aria-label="Filter timeline by type"
+                    >
+                      {TIMELINE_EVENT_FILTER_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                      <input
+                        type="checkbox"
+                        checked={timelineOnlyWithDueDate}
+                        onChange={(event) => setTimelineOnlyWithDueDate(event.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      Due only
+                    </label>
+                    <input
+                      value={timelineFromDate}
+                      onChange={(event) => setTimelineFromDate(event.target.value)}
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="From (dd/mm/yyyy)"
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
+                    />
+                    <input
+                      value={timelineToDate}
+                      onChange={(event) => setTimelineToDate(event.target.value)}
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="To (dd/mm/yyyy)"
+                      className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
                   {isEmailFeatureEnabled ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-blue-700">
@@ -2083,6 +3512,28 @@ export default function CrmBoard() {
                     </div>
                   ) : null}
                   <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
+                    {selectedContact.next_follow_up_at ? (
+                      <article className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-amber-900">Follow-up reminder</p>
+                            {selectedContact.notes ? (
+                              <p className="mt-1 text-sm leading-6 text-amber-800 line-clamp-3">{selectedContact.notes}</p>
+                            ) : (
+                              <p className="mt-1 text-sm leading-6 text-amber-800">
+                                No note yet. Add one to clarify what should happen on this follow-up.
+                              </p>
+                            )}
+                          </div>
+                          <span className="rounded-full border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                            follow-up
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs font-medium text-amber-800">
+                          Due: {formatDateOnly(selectedContact.next_follow_up_at)}
+                        </p>
+                      </article>
+                    ) : null}
                     {filteredEvents.map((timelineEvent) => (
                       <article key={timelineEvent.id} className="rounded-xl border border-[var(--border)] bg-white px-3 py-3">
                         {editingEventId === timelineEvent.id ? (
@@ -2194,7 +3645,7 @@ export default function CrmBoard() {
                     ))}
                     {filteredEvents.length === 0 ? (
                       <p className="rounded-xl border border-dashed border-[var(--border)] px-3 py-4 text-center text-xs text-[var(--muted)]">
-                        No interactions yet.
+                        No timeline events match your filters.
                       </p>
                     ) : null}
                   </div>
@@ -2203,6 +3654,33 @@ export default function CrmBoard() {
             </div>
           )}
         </aside>
+
+        {isDiscardChangesDialogOpen ? (
+          <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/55 px-4">
+            <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-2xl">
+              <p className="text-sm font-semibold text-[var(--foreground)]">Unsaved changes</p>
+              <p className="mt-2 text-sm text-[var(--muted)]">
+                You have unsaved changes in this contact. Do you want to discard them before closing?
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={cancelDiscardContactDetailsChanges}
+                  className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={discardContactDetailsChangesAndClose}
+                  className="rounded-xl border border-red-500 bg-red-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-600"
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );

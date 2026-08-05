@@ -8,6 +8,7 @@ import { generateWithCredits, InsufficientCreditsError } from "@/lib/ai/generate
 import { generateSpecialClause } from "@/lib/documents/ai-clause-generator";
 import { extractDocxPlaceholders } from "@/lib/documents/docx-renderer";
 import { renderDocxTemplate } from "@/lib/documents/docx-renderer";
+import { renderMandatVenteDocx } from "@/lib/documents/mandat-vente-docx";
 import {
   AvenantPDF,
   BailLocationPDF,
@@ -28,11 +29,7 @@ import {
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 type JsonMap = Record<string, unknown>;
-
-type CurrentProfile = {
-  workspace_id?: string | null;
-  role?: string | null;
-};
+type ExportFormat = "pdf" | "docx";
 
 type WorkspaceBrandingRow = {
   agency_name: string | null;
@@ -100,16 +97,6 @@ export async function generateDocumentDraftAction(
       return { ok: false, error: "Supabase server client is not available." };
     }
 
-    const profile = await loadCurrentProfile(supabase);
-
-    if (!profile.workspace_id || profile.workspace_id !== input.workspaceId) {
-      return { ok: false, error: "Workspace mismatch." };
-    }
-
-    if (input.templateSource === "agency_custom" && !input.customTemplateId) {
-      return { ok: false, error: "A custom template is required for agency_custom documents." };
-    }
-
     const [branding, contact, property, customTemplate] = await Promise.all([
       loadWorkspaceBranding(supabase, input.workspaceId),
       input.contactId ? loadContact(supabase, input.workspaceId, input.contactId) : Promise.resolve(null),
@@ -119,7 +106,7 @@ export async function generateDocumentDraftAction(
         : Promise.resolve(null),
     ]);
 
-    if (input.templateSource === "agency_custom" && !customTemplate) {
+    if (input.templateSource === "agency_custom" && input.customTemplateId && !customTemplate) {
       return { ok: false, error: "The selected custom template was not found in this workspace." };
     }
 
@@ -152,7 +139,15 @@ export async function generateDocumentDraftAction(
     }
 
     if (!input.documentId && shouldAssignMandateNumber(input.documentType)) {
-      mandateNumber = await getNextMandateNumber(supabase, input.workspaceId);
+      try {
+        mandateNumber = await getNextMandateNumber(supabase, input.workspaceId);
+      } catch (error) {
+        if (!isStackDepthError(error)) {
+          throw error;
+        }
+
+        mandateNumber = null;
+      }
     }
 
     const documentPayload = {
@@ -231,12 +226,6 @@ export async function loadDocumentGeneratorBootstrapAction(workspaceId: string) 
     return { ok: false, error: "Supabase server client is not available." };
   }
 
-  const profile = await loadCurrentProfile(supabase);
-
-  if (!profile.workspace_id || profile.workspace_id !== workspaceId) {
-    return { ok: false, error: "Workspace mismatch." };
-  }
-
   const [branding, contactsResult, propertiesResult, templatesResult] = await Promise.all([
     loadWorkspaceBranding(supabase, workspaceId),
     supabase
@@ -249,8 +238,7 @@ export async function loadDocumentGeneratorBootstrapAction(workspaceId: string) 
       .from("properties")
       .select("*")
       .eq("workspace_id", workspaceId)
-      .order("created_at", { ascending: false })
-      .limit(50),
+      .order("created_at", { ascending: false }),
     supabase
       .from("workspace_custom_templates")
       .select("id, document_type, name, detected_placeholders, created_at")
@@ -347,9 +335,13 @@ export async function generateDocumentSpecialClauseAction(input: {
   }
 }
 
-export async function finalizeDocumentExportAction(input: {
-  workspaceId: string;
-  documentId: string;
+export async function exportDocumentDirectAction(input: {
+  documentType: DocumentType;
+  templateSource: TemplateSource;
+  outputFormat: ExportFormat;
+  title: string;
+  formData: JsonMap;
+  specialClauses?: string[];
 }) {
   try {
     const supabase = await getSupabaseServerClient();
@@ -358,10 +350,66 @@ export async function finalizeDocumentExportAction(input: {
       return { ok: false, error: "Supabase server client is not available." };
     }
 
-    const profile = await loadCurrentProfile(supabase);
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-    if (!profile.workspace_id || profile.workspace_id !== input.workspaceId) {
-      return { ok: false, error: "Workspace mismatch." };
+    if (userError || !user) {
+      return { ok: false, error: "Unauthorized." };
+    }
+
+    const payload = {
+      ...input.formData,
+      type: input.documentType,
+      title: input.title.trim(),
+      templateSource: input.templateSource,
+      countryCode: readString(input.formData.countryCode) ?? "FR",
+      jurisdiction: readString(input.formData.jurisdiction) ?? "france",
+      specialClauses: input.specialClauses ?? [],
+    };
+
+    const parsedData = parseDocumentData(input.documentType, payload) as SupportedDocumentData;
+    const rendered = await renderDocumentBuffer({
+      outputFormat: input.outputFormat,
+      templateSource: input.templateSource,
+      documentType: input.documentType,
+      parsedData,
+    });
+    const normalizedTitle = normalizeFileName(input.title || input.documentType);
+
+    return {
+      ok: true,
+      fileName: `${normalizedTitle}.${rendered.extension}`,
+      mimeType: rendered.mimeType,
+      base64: rendered.buffer.toString("base64"),
+    };
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return {
+        ok: false,
+        error: "Some required fields are missing or invalid.",
+        fieldErrors: normalizeZodIssues(error.issues),
+      };
+    }
+
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Direct document export failed.",
+    };
+  }
+}
+
+export async function finalizeDocumentExportAction(input: {
+  workspaceId: string;
+  documentId: string;
+  outputFormat: ExportFormat;
+}) {
+  try {
+    const supabase = await getSupabaseServerClient();
+
+    if (!supabase) {
+      return { ok: false, error: "Supabase server client is not available." };
     }
 
     const { data: documentRow, error: documentError } = await supabase
@@ -393,6 +441,7 @@ export async function finalizeDocumentExportAction(input: {
       supabase,
       workspaceId: input.workspaceId,
       documentId: documentRow.id,
+      outputFormat: input.outputFormat,
       templateSource: documentRow.template_source,
       customTemplateId: documentRow.custom_template_id,
       documentType: documentRow.type,
@@ -460,16 +509,6 @@ export async function uploadCustomDocxTemplateAction(input: UploadCustomDocxTemp
     return { ok: false, error: "Supabase server client is not available." };
   }
 
-  const profile = await loadCurrentProfile(supabase);
-
-  if (!profile.workspace_id || profile.workspace_id !== input.workspaceId) {
-    return { ok: false, error: "Workspace mismatch." };
-  }
-
-  if (profile.role === "agent") {
-    return { ok: false, error: "Only workspace managers can upload custom templates." };
-  }
-
   if (!input.file.name.toLowerCase().endsWith(".docx")) {
     return { ok: false, error: "Only .docx templates are supported." };
   }
@@ -511,24 +550,6 @@ export async function uploadCustomDocxTemplateAction(input: UploadCustomDocxTemp
     ok: true,
     template: data,
   };
-}
-
-async function loadCurrentProfile(supabase: NonNullable<Awaited<ReturnType<typeof getSupabaseServerClient>>>) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    throw new Error("Unauthorized");
-  }
-
-  const { data, error } = await supabase.rpc("get_current_profile");
-
-  if (error || !data) {
-    throw new Error("Could not load the current profile.");
-  }
-
-  return data as CurrentProfile;
 }
 
 async function loadWorkspaceBranding(
@@ -582,16 +603,7 @@ async function loadProperty(
     .maybeSingle<Record<string, unknown>>();
 
   if (error) {
-    const normalizedMessage = error.message.toLowerCase();
-
-    if (
-      normalizedMessage.includes("stack depth limit exceeded") ||
-      normalizedMessage.includes("infinite recursion")
-    ) {
-      return null;
-    }
-
-    throw new Error(`Could not load property: ${error.message}`);
+    return null;
   }
 
   return data;
@@ -815,56 +827,52 @@ async function renderFinalDocument(options: {
   supabase: NonNullable<Awaited<ReturnType<typeof getSupabaseServerClient>>>;
   workspaceId: string;
   documentId: string;
+  outputFormat: ExportFormat;
   templateSource: TemplateSource;
   customTemplateId: string | null;
   documentType: DocumentType;
   title: string;
   parsedData: SupportedDocumentData;
 }) {
-  let buffer: Buffer;
-  let extension: "pdf" | "docx";
-  let mimeType: string;
+  const rendered = await renderDocumentBuffer({
+    outputFormat: options.outputFormat,
+    templateSource: options.templateSource,
+    documentType: options.documentType,
+    parsedData: options.parsedData,
+    loadAgencyTemplate: async () => {
+      if (!options.customTemplateId) {
+        throw new Error("A custom template is required for DOCX export.");
+      }
 
-  if (options.templateSource === "agency_custom") {
-    if (!options.customTemplateId) {
-      throw new Error("A custom template is required for DOCX export.");
-    }
+      const { data: templateRow, error: templateError } = await options.supabase
+        .from("workspace_custom_templates")
+        .select("docx_file_url")
+        .eq("workspace_id", options.workspaceId)
+        .eq("id", options.customTemplateId)
+        .single<{ docx_file_url: string }>();
 
-    const { data: templateRow, error: templateError } = await options.supabase
-      .from("workspace_custom_templates")
-      .select("docx_file_url")
-      .eq("workspace_id", options.workspaceId)
-      .eq("id", options.customTemplateId)
-      .single<{ docx_file_url: string }>();
+      if (templateError || !templateRow) {
+        throw new Error(templateError?.message ?? "Custom template not found.");
+      }
 
-    if (templateError || !templateRow) {
-      throw new Error(templateError?.message ?? "Custom template not found.");
-    }
+      const { data: templateObject, error: templateDownloadError } = await options.supabase.storage
+        .from("agency-templates")
+        .download(templateRow.docx_file_url);
 
-    const { data: templateObject, error: templateDownloadError } = await options.supabase.storage
-      .from("agency-templates")
-      .download(templateRow.docx_file_url);
+      if (templateDownloadError || !templateObject) {
+        throw new Error(templateDownloadError?.message ?? "Could not download the agency template.");
+      }
 
-    if (templateDownloadError || !templateObject) {
-      throw new Error(templateDownloadError?.message ?? "Could not download the agency template.");
-    }
-
-    const templateBuffer = Buffer.from(await templateObject.arrayBuffer());
-    buffer = renderDocxTemplate(templateBuffer, flattenTemplateData(options.parsedData));
-    extension = "docx";
-    mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  } else {
-    buffer = await renderToBuffer(buildPdfComponent(options.documentType, options.parsedData));
-    extension = "pdf";
-    mimeType = "application/pdf";
-  }
+      return Buffer.from(await templateObject.arrayBuffer());
+    },
+  });
 
   const normalizedTitle = normalizeFileName(options.title || `${options.documentType}-${options.documentId}`);
-  const filePath = `${options.workspaceId}/${options.documentId}/${normalizedTitle}.${extension}`;
+  const filePath = `${options.workspaceId}/${options.documentId}/${normalizedTitle}.${rendered.extension}`;
   const { error: uploadError } = await options.supabase.storage
     .from("workspace-documents")
-    .upload(filePath, buffer, {
-      contentType: mimeType,
+    .upload(filePath, rendered.buffer, {
+      contentType: rendered.mimeType,
       upsert: true,
     });
 
@@ -875,7 +883,7 @@ async function renderFinalDocument(options: {
   const { data: signedUrlData, error: signedUrlError } = await options.supabase.storage
     .from("workspace-documents")
     .createSignedUrl(filePath, 60 * 10, {
-      download: `${normalizedTitle}.${extension}`,
+      download: `${normalizedTitle}.${rendered.extension}`,
     });
 
   if (signedUrlError || !signedUrlData?.signedUrl) {
@@ -885,6 +893,45 @@ async function renderFinalDocument(options: {
   return {
     filePath,
     downloadUrl: signedUrlData.signedUrl,
+    mimeType: rendered.mimeType,
+  };
+}
+
+async function renderDocumentBuffer(options: {
+  outputFormat: ExportFormat;
+  templateSource: TemplateSource;
+  documentType: DocumentType;
+  parsedData: SupportedDocumentData;
+  loadAgencyTemplate?: () => Promise<Buffer>;
+}) {
+  let buffer: Buffer;
+  let extension: "pdf" | "docx";
+  let mimeType: string;
+
+  if (options.outputFormat === "pdf") {
+    buffer = await renderToBuffer(buildPdfComponent(options.documentType, options.parsedData));
+    extension = "pdf";
+    mimeType = "application/pdf";
+  } else if (options.templateSource === "agency_custom") {
+    if (!options.loadAgencyTemplate) {
+      throw new Error("A custom template loader is required for DOCX export.");
+    }
+
+    const templateBuffer = await options.loadAgencyTemplate();
+    buffer = renderDocxTemplate(templateBuffer, flattenTemplateData(options.parsedData));
+    extension = "docx";
+    mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  } else if (options.documentType === "mandat_vente") {
+    buffer = await renderMandatVenteDocx(options.parsedData as MandatVenteData);
+    extension = "docx";
+    mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  } else {
+    throw new Error("DOCX export without a custom template is currently only available for Mandat de vente.");
+  }
+
+  return {
+    buffer,
+    extension,
     mimeType,
   };
 }
@@ -927,4 +974,13 @@ function buildPdfComponent(documentType: DocumentType, parsedData: SupportedDocu
   }
 
   return createElement(AvenantPDF, { data: parsedData as AvenantData }) as ReactElement<DocumentProps>;
+}
+
+function isStackDepthError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return message.includes("stack depth limit exceeded") || message.includes("infinite recursion");
 }

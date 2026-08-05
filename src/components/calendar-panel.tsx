@@ -1019,7 +1019,7 @@ export default function CalendarPanel() {
                 }}
                 className={`rounded-xl border px-3 py-1.5 text-sm font-semibold transition ${
                   viewMode === mode
-                    ? "border-[var(--accent)] bg-blue-50 text-[var(--accent)]"
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--foreground)]"
                     : "border-[var(--border)] bg-white text-[var(--foreground)] hover:bg-slate-50"
                 }`}
               >
@@ -1053,14 +1053,18 @@ export default function CalendarPanel() {
                     }}
                     className={`min-h-[92px] rounded-2xl border px-2 py-2 text-left transition ${
                       isSelected
-                        ? "border-[var(--accent)] bg-blue-50"
+                        ? "border-[var(--accent)] bg-[var(--accent-soft)]"
                         : "border-[var(--border)] bg-white/80 hover:bg-slate-50"
                     } ${!isCurrentMonth ? "opacity-50" : "opacity-100"}`}
                   >
                     <p className="text-sm font-semibold text-[var(--foreground)]">{day.getDate()}</p>
                     <div className="mt-2 space-y-1">
-                      <p className="text-[11px] font-medium text-[var(--muted)]">Personal events: {dayPersonalCount}</p>
-                      <p className="text-[11px] font-medium text-[var(--muted)]">Absences: {dayAbsenceCount}</p>
+                      <p className={`text-[11px] font-medium ${isSelected ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
+                        Personal events: {dayPersonalCount}
+                      </p>
+                      <p className={`text-[11px] font-medium ${isSelected ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
+                        Absences: {dayAbsenceCount}
+                      </p>
                     </div>
                   </button>
                 );
@@ -1080,7 +1084,7 @@ export default function CalendarPanel() {
                       key={`timeline-header-${dayKey}`}
                       type="button"
                       onClick={() => setSelectedDateKey(dayKey)}
-                      className={`rounded-xl border px-2 py-2 text-left ${isSelected ? "border-[var(--accent)] bg-blue-50" : "border-[var(--border)] bg-white"}`}
+                      className={`rounded-xl border px-2 py-2 text-left ${isSelected ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--border)] bg-white"}`}
                     >
                       <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">
                         {new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(day)}

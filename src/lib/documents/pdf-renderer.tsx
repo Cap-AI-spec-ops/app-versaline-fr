@@ -13,6 +13,7 @@ import type {
   MandatRechercheData,
   MandatVenteData,
 } from "@/lib/documents/schemas";
+import { buildMandatVenteContractSections } from "@/lib/documents/mandat-vente-contract";
 
 type BrandingLike = {
   agencyName: string;
@@ -33,36 +34,35 @@ type StandardPdfProps<TDocument> = {
 };
 
 export function MandatVentePDF({ data }: StandardPdfProps<MandatVenteData>) {
+  const contractSections = buildMandatVenteContractSections(data);
+
   return (
     <StandardDocumentLayout branding={data.workspaceBranding} title={data.title} subtitle="Mandat de vente">
-      <FactSection
-        title="Mandant"
-        rows={[
-          ["Nom", data.principalSeller.fullName],
-          ["Email", data.principalSeller.email ?? "Non renseigné"],
-          ["Téléphone", data.principalSeller.phone ?? "Non renseigné"],
-        ]}
-      />
-      <FactSection
-        title="Bien"
-        rows={[
-          ["Adresse", `${data.property.addressLine1}, ${data.property.postalCode} ${data.property.city}`],
-          ["Cadastre", data.property.cadastreReference ?? "Non renseigné"],
-          ["Surface Loi Carrez", `${data.property.loiCarrezSurfaceSqm} m²`],
-          ["DPE", `${data.property.dpeEnergyRating} / ${data.property.dpeClimateRating}`],
-        ]}
-      />
-      <FactSection
-        title="Conditions financières"
-        rows={[
-          ["Type de mandat", data.mandateType],
-          ["Prix de présentation", formatEuro(data.economics.listingPriceEur)],
-          ["Prix net vendeur", formatEuro(data.economics.netSellerPriceEur)],
-          ["Honoraires agence", formatEuro(data.economics.agencyFeesEur)],
-          ["Charge honoraires", data.economics.feePayer],
-        ]}
-      />
-      <Text style={styles.blockText}>{buildClausesBlock(data.specialClauses)}</Text>
+      {contractSections.map((section) => (
+        <View key={section.title} style={styles.section}>
+          <Text style={styles.sectionTitle}>{section.title}</Text>
+          {section.paragraphs.map((paragraph, index) => (
+            <Text key={`${section.title}-paragraph-${index}`} style={styles.contractParagraph}>
+              {paragraph}
+            </Text>
+          ))}
+          {(section.bulletLines ?? []).map((line, index) => (
+            <Text key={`${section.title}-bullet-${index}`} style={styles.contractBullet}>
+              {`- ${line}`}
+            </Text>
+          ))}
+        </View>
+      ))}
+      {data.specialClauses.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Clauses particulieres</Text>
+          {data.specialClauses.map((clause, index) => (
+            <Text key={`special-clause-${index}`} style={styles.contractBullet}>
+              {`- ${clause}`}
+            </Text>
+          ))}
+        </View>
+      ) : null}
     </StandardDocumentLayout>
   );
 }
@@ -309,5 +309,16 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     fontSize: 10,
     lineHeight: 1.5,
+  },
+  contractParagraph: {
+    color: "#0F172A",
+    fontSize: 10,
+    lineHeight: 1.45,
+  },
+  contractBullet: {
+    color: "#0F172A",
+    fontSize: 10,
+    lineHeight: 1.4,
+    marginLeft: 4,
   },
 });

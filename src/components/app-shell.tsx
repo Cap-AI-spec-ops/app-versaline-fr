@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { ChatAssistantWidget } from "@/components/chat-assistant-widget";
 import { CreditBalanceBadge } from "@/components/credit-balance-badge";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { resolveAppearancePreferences } from "@/lib/preferences/appearance";
@@ -301,10 +302,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   const handleOpenSupportModal = () => {
-    setSupportSubject(`Question about ${pathname}`);
-    setSupportMessage("");
-    setSupportStatus(null);
-    setIsSupportModalOpen(true);
+    const supportWindow = window.open("https://www.support.versaline.fr", "_blank", "noopener,noreferrer");
+
+    if (!supportWindow) {
+      window.location.href = "https://www.support.versaline.fr";
+    }
   };
 
   const handleSupportSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -716,6 +718,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       ) : null}
+
+      <ChatAssistantWidget workspaceId={currentWorkspaceId} />
     </div>
   );
 }

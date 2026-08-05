@@ -16,11 +16,17 @@ type ArchivedContact = {
   email: string | null;
   phone: string | null;
   client_type: string;
+  contact_roles: string[] | null;
   budget: number | null;
   currency: string;
   priority: ContactPriority;
   updated_at: string;
 };
+
+function getContactRoles(contact: ArchivedContact) {
+  const roles = Array.isArray(contact.contact_roles) ? contact.contact_roles.filter(Boolean) : [];
+  return roles.length > 0 ? roles : [contact.client_type];
+}
 
 function formatMoney(value: number | null, currency: string) {
   if (value === null) {
@@ -88,7 +94,7 @@ export default function CrmArchiveTable() {
 
     const { data, error: fetchError } = await supabase
       .from("crm_contacts")
-      .select("id, workspace_id, first_name, last_name, email, phone, client_type, budget, currency, priority, updated_at, stage")
+      .select("id, workspace_id, first_name, last_name, email, phone, client_type, contact_roles, budget, currency, priority, updated_at, stage")
       .eq("workspace_id", workspaceId)
       .order("updated_at", { ascending: false });
 
@@ -155,7 +161,7 @@ export default function CrmArchiveTable() {
       fullName(contact),
       contact.email ?? "",
       contact.phone ?? "",
-      contact.client_type,
+      getContactRoles(contact).join(" "),
       contact.priority,
       formatMoney(contact.budget, contact.currency),
     ];
@@ -221,7 +227,7 @@ export default function CrmArchiveTable() {
                   <p className="font-semibold text-[var(--foreground)]">{fullName(contact)}</p>
                   <p className="text-xs text-[var(--muted)]">{contact.email ?? contact.phone ?? "No email or phone"}</p>
                 </td>
-                <td className="px-4 py-3 text-[var(--foreground)]">{contact.client_type}</td>
+                <td className="px-4 py-3 text-[var(--foreground)]">{getContactRoles(contact).join(" / ")}</td>
                 <td className="px-4 py-3">
                   <span
                     className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${getPriorityBadgeClasses(contact.priority)}`}

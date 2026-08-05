@@ -138,6 +138,17 @@ export const ACTION_CONFIG = {
     creditCost: 0.5,
     useCache: false,
   },
+  chat_assistant: {
+    provider: 'gemini',
+    models: {
+      anthropic: 'claude-sonnet-4-20250514',
+      gemini: 'gemini-2.5-flash-lite',
+      mistral: 'mistral-small-latest',
+      xai: 'grok-4-fast-reasoning',
+    },
+    creditCost: 0.1,
+    useCache: false,
+  },
 } as const satisfies Record<string, ActionConfig>;
 
 export type ActionType = keyof typeof ACTION_CONFIG;

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useDeferredValue, useEffect, useState } from "react";
 
 import {
+  exportDocumentDirectAction,
   finalizeDocumentExportAction,
   generateDocumentDraftAction,
   generateDocumentSpecialClauseAction,
@@ -21,12 +22,12 @@ const TEMPLATE_OPTIONS = [
   {
     value: "versaline_standard",
     label: "Versaline Standard Template",
-    detail: "Generate a branded PDF using the shared Versaline layout.",
+    detail: "Use the built-in FR legal contract copy for PDF or DOCX export.",
   },
   {
     value: "agency_custom",
     label: "Our Agency Custom Template",
-    detail: "Merge your uploaded DOCX template with CRM data and manual overrides.",
+    detail: "Use your uploaded DOCX template for DOCX export, with PDF still available.",
   },
 ] as const;
 
@@ -49,6 +50,7 @@ type BootstrapSuccess = Extract<
   { contacts: unknown[]; properties: unknown[]; templates: unknown[]; brandingReady: boolean }
 >;
 type TemplateSource = (typeof TEMPLATE_OPTIONS)[number]["value"];
+type ExportFormat = "pdf" | "docx";
 
 type MandatVenteFormState = {
   title: string;
@@ -147,6 +149,7 @@ export default function DocumentGeneratorPanel() {
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [isGeneratingClause, setIsGeneratingClause] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
   const [uploadName, setUploadName] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploadingTemplate, setIsUploadingTemplate] = useState(false);
@@ -272,11 +275,6 @@ export default function DocumentGeneratorPanel() {
       return null;
     }
 
-    if (templateSource === "agency_custom" && !selectedTemplateId) {
-      setMessage("Select or upload a custom DOCX template before continuing.");
-      return null;
-    }
-
     setIsSavingDraft(true);
     setMessage(null);
     setFieldErrors({});
@@ -353,7 +351,7 @@ export default function DocumentGeneratorPanel() {
     setMessage(`Special clause generated. Credits used: ${result.creditsUsed}.`);
   }
 
-  async function handleExport() {
+  async function handleExport(format: ExportFormat) {
     if (!workspace?.id) {
       setMessage("Workspace not found.");
       return;
@@ -364,13 +362,41 @@ export default function DocumentGeneratorPanel() {
       return;
     }
 
-    if (templateSource === "agency_custom" && !selectedTemplateId) {
+    if (format === "docx" && templateSource === "agency_custom" && !selectedTemplateId) {
       setMessage("Select or upload a custom DOCX template before export.");
       return;
     }
 
     setIsExporting(true);
+    setExportingFormat(format);
     setMessage(null);
+
+    if (templateSource === "versaline_standard") {
+      const directResult = await exportDocumentDirectAction({
+        documentType: ACTIVE_DOCUMENT_TYPE,
+        templateSource,
+        outputFormat: format,
+        title: form.title,
+        formData: buildMandatVenteFormData(form, specialClauses, bootstrap?.branding ?? null),
+        specialClauses,
+      });
+
+      setIsExporting(false);
+      setExportingFormat(null);
+
+      if (!directResult.ok) {
+        setMessage(directResult.error ?? "Could not export document.");
+        setFieldErrors(directResult.fieldErrors ?? {});
+        return;
+      }
+
+      setFieldErrors({});
+      setExportMimeType(directResult.mimeType);
+      setDownloadUrl(null);
+      triggerBase64DocumentDownload(directResult.base64, directResult.fileName, directResult.mimeType);
+      setMessage(`Document exported in ${format.toUpperCase()} format.`);
+      return;
+    }
 
     let nextDraftId = draftId;
 
@@ -381,15 +407,18 @@ export default function DocumentGeneratorPanel() {
     if (!nextDraftId) {
       setMessage((current) => current ?? "The draft could not be saved. Please review required fields and try again.");
       setIsExporting(false);
+      setExportingFormat(null);
       return;
     }
 
     const result = await finalizeDocumentExportAction({
       workspaceId: workspace.id,
       documentId: nextDraftId,
+      outputFormat: format,
     });
 
     setIsExporting(false);
+    setExportingFormat(null);
 
     if (!result.ok) {
       setMessage(result.error ?? "Could not export document.");
@@ -410,7 +439,7 @@ export default function DocumentGeneratorPanel() {
       newBalance: result.newBalance,
       source: "document-export",
     });
-    setMessage("Document exported.");
+    setMessage(`Document exported in ${format.toUpperCase()} format.`);
   }
 
   async function handleTemplateUpload() {
@@ -922,7 +951,7 @@ export default function DocumentGeneratorPanel() {
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">Document</p>
                   <p className="mt-1 font-semibold">{form.title || "Mandat de vente"}</p>
-                  <p className="text-[var(--muted)]">{templateSource === "versaline_standard" ? "Versaline PDF" : "Agency DOCX"}</p>
+                  <p className="text-[var(--muted)]">{templateSource === "versaline_standard" ? "Standard legal template" : "Agency custom template"}</p>
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">Seller</p>
@@ -976,11 +1005,19 @@ export default function DocumentGeneratorPanel() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleExport()}
+                  onClick={() => void handleExport("pdf")}
                   disabled={isExporting || isSavingDraft}
                   className="inline-flex items-center rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:opacity-60"
                 >
-                  {isExporting ? "Exporting..." : templateSource === "versaline_standard" ? "Generate & export PDF" : "Generate & export DOCX"}
+                  {isExporting && exportingFormat === "pdf" ? "Exporting PDF..." : "Generate & export PDF"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleExport("docx")}
+                  disabled={isExporting || isSavingDraft || (templateSource === "agency_custom" && !selectedTemplateId)}
+                  className="inline-flex items-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-950 disabled:opacity-60"
+                >
+                  {isExporting && exportingFormat === "docx" ? "Exporting DOCX..." : "Generate & export DOCX"}
                 </button>
               </div>
 
@@ -1012,10 +1049,26 @@ function Field(props: { label: string; children: React.ReactNode }) {
   );
 }
 
-function buildMandatVenteFormData(form: MandatVenteFormState, specialClauses: string[]) {
+function buildMandatVenteFormData(
+  form: MandatVenteFormState,
+  specialClauses: string[],
+  branding: BootstrapSuccess["branding"] | null,
+) {
   return {
     title: form.title,
-    workspaceBranding: {},
+    workspaceBranding: {
+      agencyName: branding?.agency_name ?? "",
+      logoUrl: branding?.logo_url ?? null,
+      primaryColor: branding?.primary_color ?? "#0F172A",
+      accentColor: branding?.accent_color ?? "#3B82F6",
+      carteTNumber: branding?.carte_t_number ?? "",
+      carteTCci: branding?.carte_t_cci ?? "",
+      siret: branding?.siret ?? "",
+      rcpPolicyNumber: branding?.rcp_policy_number ?? null,
+      rcpInsurer: branding?.rcp_insurer ?? "",
+      guarantorName: branding?.guarantor_name ?? null,
+      guarantorAmountEur: branding?.guarantor_amount_eur ?? null,
+    },
     mandateType: form.mandateType,
     principalSeller: {
       fullName: form.sellerName,
@@ -1117,6 +1170,29 @@ function triggerDocumentDownload(url: string, _mimeType: string) {
   anchor.remove();
 
   window.location.assign(url);
+}
+
+function triggerBase64DocumentDownload(base64: string, fileName: string, mimeType: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  const blob = new Blob([bytes], { type: mimeType });
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = fileName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(downloadUrl);
 }
 
 function formatFieldErrorLabel(key: string) {
