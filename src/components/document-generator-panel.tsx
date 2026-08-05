@@ -286,7 +286,7 @@ export default function DocumentGeneratorPanel() {
       documentType: ACTIVE_DOCUMENT_TYPE,
       templateSource,
       title: form.title,
-      formData: buildMandatVenteFormData(form, specialClauses),
+      formData: buildMandatVenteFormData(form, specialClauses, bootstrap?.branding ?? null),
       specialClauses,
       contactId: selectedContactId || null,
       propertyId: selectedPropertyId || null,
