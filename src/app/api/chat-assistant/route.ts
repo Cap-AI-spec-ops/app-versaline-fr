@@ -480,7 +480,7 @@ async function resolveChatAssistantModelSettings(supabase: SupabaseClient, works
   const row = await getChatAssistantSettingRow(supabase, workspaceId);
 
   if (row) {
-    const provider = normalizeProvider(firstNonEmpty(row.provider, row.text_provider));
+    const provider = normalizeProvider(firstNonEmpty(row.provider, row.text_provider) ?? undefined);
     const model = firstNonEmpty(row.model, row.text_model);
 
     if (model) {
