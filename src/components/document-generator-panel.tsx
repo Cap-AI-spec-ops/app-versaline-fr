@@ -391,7 +391,7 @@ export default function DocumentGeneratorPanel() {
       }
 
       setFieldErrors({});
-      setExportMimeType(directResult.mimeType);
+      setExportMimeType(directResult.mimeType ?? null);
       setDownloadUrl(null);
       triggerBase64DocumentDownload(directResult.base64, directResult.fileName, directResult.mimeType);
       setMessage(`Document exported in ${format.toUpperCase()} format.`);
