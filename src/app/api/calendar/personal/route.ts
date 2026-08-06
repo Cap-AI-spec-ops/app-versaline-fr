@@ -679,8 +679,8 @@ async function resolveOutlookAccessToken(connection: MailboxConnectionRow) {
     return connection.oauth_access_token?.trim() || null;
   }
 
-  const clientId = process.env.AZURE_CLIENT_ID?.trim();
-  const clientSecret = process.env.AZURE_CLIENT_SECRET?.trim();
+  const clientId = process.env.AZURE_CLIENT_ID?.trim() || process.env.MICROSOFT_CLIENT_ID?.trim();
+  const clientSecret = process.env.AZURE_CLIENT_SECRET?.trim() || process.env.MICROSOFT_CLIENT_SECRET?.trim();
   const tenantId = process.env.AZURE_TENANT_ID?.trim() || "common";
 
   if (!clientId || !clientSecret) {

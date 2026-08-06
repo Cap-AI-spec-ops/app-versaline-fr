@@ -60,6 +60,52 @@ type TimelineEvent = {
   height: number;
 };
 
+async function readJsonResponse<T>(response: Response): Promise<T | null> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+
+  if (!contentType.includes("application/json")) {
+    return null;
+  }
+
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function getCalendarLoadError(response: Response, payload: PersonalCalendarResponse | null) {
+  if (payload?.error) {
+    return payload.error;
+  }
+
+  if (response.status === 404) {
+    return "Personal calendar is temporarily unavailable.";
+  }
+
+  if (response.status === 401) {
+    return "Your session expired. Reload the page and sign in again.";
+  }
+
+  return "Could not load personal calendar.";
+}
+
+function getPersonalMutationError(response: Response, payload: { error?: string } | null, fallback: string) {
+  if (payload?.error) {
+    return payload.error;
+  }
+
+  if (response.status === 404) {
+    return "Personal calendar is temporarily unavailable.";
+  }
+
+  if (response.status === 401) {
+    return "Your session expired. Reload the page and sign in again.";
+  }
+
+  return fallback;
+}
+
 function toIsoDate(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -296,14 +342,14 @@ export default function CalendarPanel() {
           cache: "no-store",
         });
 
-        const payload = (await response.json()) as PersonalCalendarResponse;
+        const payload = await readJsonResponse<PersonalCalendarResponse>(response);
 
         if (!response.ok) {
-          throw new Error(payload.error || "Could not load personal calendar.");
+          throw new Error(getCalendarLoadError(response, payload));
         }
 
-        setProviders(payload.providers ?? []);
-        setPersonalEvents(payload.events ?? []);
+        setProviders(payload?.providers ?? []);
+        setPersonalEvents(payload?.events ?? []);
       } catch (error) {
         if (signal?.aborted) {
           return;
@@ -587,10 +633,10 @@ export default function CalendarPanel() {
         }),
       });
 
-      const payload = (await response.json()) as { error?: string };
+      const payload = await readJsonResponse<{ error?: string }>(response);
 
       if (!response.ok) {
-        throw new Error(payload.error || "Could not create personal event.");
+        throw new Error(getPersonalMutationError(response, payload, "Could not create personal event."));
       }
 
       setPersonalFormMessage("Personal event created.");
@@ -627,10 +673,10 @@ export default function CalendarPanel() {
         }),
       });
 
-      const payload = (await response.json()) as { error?: string };
+      const payload = await readJsonResponse<{ error?: string }>(response);
 
       if (!response.ok) {
-        throw new Error(payload.error || "Could not delete personal event.");
+        throw new Error(getPersonalMutationError(response, payload, "Could not delete personal event."));
       }
 
       setPersonalFormMessage("Personal event deleted.");

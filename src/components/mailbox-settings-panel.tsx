@@ -294,16 +294,31 @@ export default function MailboxSettingsPanel() {
       const { data: sessionData } = await supabase.auth.getSession();
       const providerToken = sessionData.session?.provider_token ?? null;
       const providerRefreshToken = sessionData.session?.provider_refresh_token ?? null;
+      const oauthConnectedAt = new Date().toISOString();
+
+      const finalizePayload: {
+        status: "connected";
+        last_error: null;
+        oauth_token_updated_at: string;
+        oauth_access_token?: string;
+        oauth_refresh_token?: string;
+      } = {
+        status: "connected",
+        last_error: null,
+        oauth_token_updated_at: oauthConnectedAt,
+      };
+
+      if (providerToken) {
+        finalizePayload.oauth_access_token = providerToken;
+      }
+
+      if (providerRefreshToken) {
+        finalizePayload.oauth_refresh_token = providerRefreshToken;
+      }
 
       const { error: finalizeError } = await supabase
         .from("mailbox_connections")
-        .update({
-          status: "connected",
-          last_error: null,
-          oauth_access_token: providerToken,
-          oauth_refresh_token: providerRefreshToken,
-          oauth_token_updated_at: providerToken || providerRefreshToken ? new Date().toISOString() : null,
-        })
+        .update(finalizePayload)
         .eq("workspace_id", workspaceId)
         .eq("profile_id", user.id)
         .eq("provider", oauthReturnProvider)
@@ -316,6 +331,7 @@ export default function MailboxSettingsPanel() {
             ...nextRows[oauthReturnProvider],
             status: "connected",
             last_error: null,
+            oauth_token_updated_at: oauthConnectedAt,
           },
         };
 

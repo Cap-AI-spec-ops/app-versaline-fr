@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -23,11 +24,26 @@ function parseProvider(value: string | null): OAuthProvider | null {
   return null;
 }
 
+function resolvePublicAppOrigin(request: NextRequest) {
+  const forwardedHost = request.headers.get("x-forwarded-host")?.trim();
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.trim();
+
+  if (forwardedHost) {
+    return `${forwardedProto || "https"}://${forwardedHost}`;
+  }
+
+  return request.nextUrl.origin;
+}
+
 export async function GET(request: NextRequest) {
   const callbackMode = request.nextUrl.searchParams.get("callback");
 
   if (callbackMode === "google") {
     return handleGoogleCallback(request);
+  }
+
+  if (callbackMode === "azure") {
+    return handleAzureCallback(request);
   }
 
   const provider = parseProvider(request.nextUrl.searchParams.get("provider"));
@@ -59,7 +75,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL("/settings/mailbox?error=google_oauth_not_configured", request.url));
     }
 
-    const callbackBaseUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || request.nextUrl.origin;
+    const callbackBaseUrl = resolvePublicAppOrigin(request);
     const redirectUri = `${callbackBaseUrl.replace(/\/$/, "")}/api/mailbox/connect?callback=google`;
 
     const statePayload: GoogleMailboxState = {
@@ -85,10 +101,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(authUrl);
   }
 
-  const callbackBaseUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || request.nextUrl.origin;
-  const redirectTo = `${callbackBaseUrl.replace(/\/$/, "")}/settings/mailbox${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""}`;
+  const oauthResponse = NextResponse.redirect(request.nextUrl);
+  const oauthSupabase = createSupabaseRouteHandlerClient(request, oauthResponse);
 
-  const { data, error } = await supabase.auth.signInWithOAuth({
+  if (!oauthSupabase) {
+    return NextResponse.redirect(new URL("/settings/mailbox?error=supabase_unavailable", request.url));
+  }
+
+  const callbackBaseUrl = resolvePublicAppOrigin(request);
+  const redirectTo = `${callbackBaseUrl.replace(/\/$/, "")}/api/mailbox/connect?callback=azure${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`;
+
+  const { data, error } = await oauthSupabase.auth.signInWithOAuth({
     provider,
     options: {
       redirectTo,
@@ -100,7 +123,77 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/settings/mailbox?error=oauth_init_failed", request.url));
   }
 
-  return NextResponse.redirect(data.url);
+  oauthResponse.headers.set("location", data.url);
+  return oauthResponse;
+}
+
+async function handleAzureCallback(request: NextRequest) {
+  const code = request.nextUrl.searchParams.get("code")?.trim();
+  const error = request.nextUrl.searchParams.get("error")?.trim();
+  const workspaceId = request.nextUrl.searchParams.get("workspaceId")?.trim();
+
+  if (error) {
+    return NextResponse.redirect(new URL(`/settings/mailbox?error=${encodeURIComponent(error)}`, request.url));
+  }
+
+  if (!code || !workspaceId) {
+    return NextResponse.redirect(new URL("/settings/mailbox?error=oauth_callback_invalid", request.url));
+  }
+
+  const response = NextResponse.redirect(new URL(`/settings/mailbox?workspaceId=${encodeURIComponent(workspaceId)}&connected=outlook`, request.url));
+  const supabase = createSupabaseRouteHandlerClient(request, response);
+
+  if (!supabase) {
+    return NextResponse.redirect(new URL("/settings/mailbox?error=supabase_unavailable", request.url));
+  }
+
+  const { data: exchangeData, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+
+  if (exchangeError) {
+    return NextResponse.redirect(new URL("/settings/mailbox?error=oauth_exchange_failed", request.url));
+  }
+
+  const session = exchangeData.session;
+  const user = session?.user;
+
+  if (!user) {
+    return NextResponse.redirect(new URL("/login?next=/settings/mailbox", request.url));
+  }
+
+  const providerToken = session.provider_token?.trim() || null;
+  const providerRefreshToken = session.provider_refresh_token?.trim() || null;
+
+  if (!providerToken) {
+    return NextResponse.redirect(new URL("/settings/mailbox?error=outlook_access_token_missing", request.url));
+  }
+
+  const adminClient = getSupabaseAdminClient();
+
+  if (!adminClient) {
+    return NextResponse.redirect(new URL("/settings/mailbox?error=supabase_admin_unavailable", request.url));
+  }
+
+  const { error: updateError } = await adminClient
+    .from("mailbox_connections")
+    .upsert(
+      {
+        workspace_id: workspaceId,
+        profile_id: user.id,
+        provider: "outlook",
+        status: "connected",
+        last_error: null,
+        oauth_access_token: providerToken,
+        oauth_refresh_token: providerRefreshToken,
+        oauth_token_updated_at: new Date().toISOString(),
+      },
+      { onConflict: "workspace_id,profile_id,provider" },
+    );
+
+  if (updateError) {
+    return NextResponse.redirect(new URL("/settings/mailbox?error=mailbox_token_store_failed", request.url));
+  }
+
+  return response;
 }
 
 async function handleGoogleCallback(request: NextRequest) {
@@ -149,7 +242,7 @@ async function handleGoogleCallback(request: NextRequest) {
     return NextResponse.redirect(new URL("/settings/mailbox?error=google_oauth_not_configured", request.url));
   }
 
-  const callbackBaseUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || request.nextUrl.origin;
+  const callbackBaseUrl = resolvePublicAppOrigin(request);
   const redirectUri = `${callbackBaseUrl.replace(/\/$/, "")}/api/mailbox/connect?callback=google`;
 
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
@@ -270,6 +363,28 @@ function getSupabaseAdminClient() {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
+    },
+  });
+}
+
+function createSupabaseRouteHandlerClient(request: NextRequest, response: NextResponse) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return null;
+  }
+
+  return createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => {
+          response.cookies.set(name, value, options);
+        });
+      },
     },
   });
 }

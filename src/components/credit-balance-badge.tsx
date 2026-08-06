@@ -133,6 +133,18 @@ export function CreditBalanceBadge({
           }
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "credit_transactions",
+          filter: `workspace_id=eq.${workspaceId}`,
+        },
+        () => {
+          void loadBalance(false);
+        },
+      )
       .subscribe();
 
     return () => {

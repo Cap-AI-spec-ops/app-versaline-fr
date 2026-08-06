@@ -46,6 +46,33 @@ type GmailMessageResponse = {
   };
 };
 
+type OutlookMessageListResponse = {
+  value?: OutlookMessageResponse[];
+};
+
+type OutlookMessageResponse = {
+  id?: string;
+  conversationId?: string;
+  receivedDateTime?: string;
+  sentDateTime?: string;
+  subject?: string;
+  bodyPreview?: string;
+  body?: {
+    contentType?: string;
+    content?: string;
+  };
+  from?: {
+    emailAddress?: {
+      address?: string;
+    };
+  };
+};
+
+type OutlookMailboxProfileResponse = {
+  mail?: string;
+  userPrincipalName?: string;
+};
+
 const MAX_MESSAGES_PER_SYNC = 25;
 const MAILBOX_RECONNECT_INTERVAL_DAYS = 90;
 
@@ -166,10 +193,6 @@ async function syncMailbox(request: NextRequest, method: "GET" | "POST") {
     let queuedJobs = 0;
 
     for (const row of rows) {
-      if (row.provider !== "gmail") {
-        continue;
-      }
-
       try {
         const { error: enqueueError } = await supabaseAdmin.rpc("enqueue_mailbox_sync_job", {
           p_workspace_id: row.workspace_id,
@@ -224,18 +247,12 @@ async function syncMailbox(request: NextRequest, method: "GET" | "POST") {
   const failedConnections: Array<{ connectionId: string; reason: string }> = [];
 
   for (const row of rows) {
-    if (row.provider !== "gmail") {
-      continue;
-    }
-
     try {
       if (isMailboxReconnectRequired(row.oauth_token_updated_at)) {
         throw new Error(
           `Mailbox reconnection required every ${MAILBOX_RECONNECT_INTERVAL_DAYS} days. Please reconnect ${row.provider} mailbox and try again.`,
         );
       }
-
-      const accessToken = await resolveGmailAccessToken(row);
 
       if (
         profileIdScope &&
@@ -256,21 +273,32 @@ async function syncMailbox(request: NextRequest, method: "GET" | "POST") {
         row.oauth_refresh_token = row.oauth_refresh_token ?? sessionOAuthTokens.providerRefreshToken;
       }
 
+      const accessToken =
+        row.provider === "outlook" ? await resolveOutlookAccessToken(row) : await resolveGmailAccessToken(row);
       const resolvedAccessToken = accessToken || row.oauth_access_token || sessionOAuthTokens.providerToken || null;
 
       if (!resolvedAccessToken) {
         throw new Error(
-          "No Gmail access token available. Reconnect mailbox, then click Sync now immediately from the same signed-in session.",
+          `No ${row.provider === "outlook" ? "Outlook" : "Gmail"} access token available. Reconnect mailbox, then click Sync now immediately from the same signed-in session.`,
         );
       }
 
-      const syncResult = await syncOneGmailMailbox({
-        requestUrl: request.url,
-        supabaseAdmin,
-        connection: row,
-        accessToken: resolvedAccessToken,
-        inboundSecret,
-      });
+      const syncResult =
+        row.provider === "outlook"
+          ? await syncOneOutlookMailbox({
+              requestUrl: request.url,
+              supabaseAdmin,
+              connection: row,
+              accessToken: resolvedAccessToken,
+              inboundSecret,
+            })
+          : await syncOneGmailMailbox({
+              requestUrl: request.url,
+              supabaseAdmin,
+              connection: row,
+              accessToken: resolvedAccessToken,
+              inboundSecret,
+            });
 
       processedMessages += syncResult.processedMessages;
       savedSummaries += syncResult.savedSummaries;
@@ -417,6 +445,124 @@ export async function syncOneGmailMailbox(params: {
   };
 }
 
+export async function syncOneOutlookMailbox(params: {
+  requestUrl: string;
+  supabaseAdmin: SupabaseClient;
+  connection: MailboxConnectionRow;
+  accessToken: string;
+  inboundSecret: string;
+}) {
+  const receivedAfterMs = resolveOutlookReceivedAfterMs(params.connection.last_synced_at);
+  const mailboxEmail = params.connection.include_sent_mail ? null : await fetchOutlookMailboxEmail(params.accessToken);
+  const listUrl = new URL("https://graph.microsoft.com/v1.0/me/messages");
+
+  listUrl.searchParams.set("$top", String(MAX_MESSAGES_PER_SYNC));
+  listUrl.searchParams.set("$orderby", "receivedDateTime desc");
+  listUrl.searchParams.set(
+    "$select",
+    "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,body,from",
+  );
+
+  const listResponse = await fetch(listUrl.toString(), {
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+      Prefer: 'outlook.body-content-type="text"',
+    },
+  });
+
+  if (!listResponse.ok) {
+    const details = await safeReadJson(listResponse);
+    throw new Error(`Outlook list failed (${listResponse.status}): ${JSON.stringify(details)}`);
+  }
+
+  const listPayload = (await listResponse.json()) as OutlookMessageListResponse;
+  const messages = listPayload.value ?? [];
+
+  let processedMessages = 0;
+  let savedSummaries = 0;
+  let newBalance: number | null = null;
+
+  for (const message of messages) {
+    const messageId = message.id?.trim();
+
+    if (!messageId) {
+      continue;
+    }
+
+    const occurredAt = resolveOutlookOccurredAt(message);
+    const occurredAtMs = new Date(occurredAt).getTime();
+
+    if (!Number.isNaN(occurredAtMs) && occurredAtMs < receivedAfterMs) {
+      continue;
+    }
+
+    const senderEmail = normalizeOutlookSenderEmail(message);
+
+    if (!senderEmail) {
+      continue;
+    }
+
+    if (mailboxEmail && senderEmail === mailboxEmail) {
+      continue;
+    }
+
+    const body = extractOutlookMessageBody(message);
+
+    if (!body) {
+      continue;
+    }
+
+    const payload = {
+      workspaceId: params.connection.workspace_id,
+      mailboxConnectionId: params.connection.id,
+      billedUserId: params.connection.profile_id,
+      provider: "outlook",
+      messageIdHash: sha256(messageId),
+      threadIdHash: message.conversationId?.trim() ? sha256(message.conversationId.trim()) : undefined,
+      senderEmail,
+      subject: message.subject?.trim() || undefined,
+      body,
+      receivedAt: occurredAt,
+    };
+
+    const inboundUrl = new URL("/api/inbound-email", params.requestUrl).toString();
+    const inboundResponse = await fetch(inboundUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-inbound-email-secret": params.inboundSecret,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const inboundJson = await safeReadJson(inboundResponse);
+
+    if (!inboundResponse.ok) {
+      throw new Error(`Inbound triage failed (${inboundResponse.status}): ${JSON.stringify(inboundJson)}`);
+    }
+
+    processedMessages += 1;
+
+    if (typeof inboundJson === "object" && inboundJson && "action" in inboundJson) {
+      const resultPayload = inboundJson as Record<string, unknown>;
+      const action = String(resultPayload.action);
+      if (action === "save_summary") {
+        savedSummaries += 1;
+      }
+
+      if (typeof resultPayload.newBalance === "number") {
+        newBalance = resultPayload.newBalance;
+      }
+    }
+  }
+
+  return {
+    processedMessages,
+    savedSummaries,
+    newBalance,
+  };
+}
+
 export async function resolveGmailAccessToken(connection: MailboxConnectionRow) {
   const refreshToken = connection.oauth_refresh_token?.trim() || "";
 
@@ -450,6 +596,61 @@ export async function resolveGmailAccessToken(connection: MailboxConnectionRow) 
 
   const payload = (await refreshResponse.json()) as { access_token?: string };
   return payload.access_token?.trim() || connection.oauth_access_token?.trim() || null;
+}
+
+export async function resolveOutlookAccessToken(connection: MailboxConnectionRow) {
+  const refreshToken = connection.oauth_refresh_token?.trim() || "";
+
+  if (!refreshToken) {
+    return connection.oauth_access_token?.trim() || null;
+  }
+
+  const clientId = process.env.AZURE_CLIENT_ID?.trim() || process.env.MICROSOFT_CLIENT_ID?.trim();
+  const clientSecret = process.env.AZURE_CLIENT_SECRET?.trim() || process.env.MICROSOFT_CLIENT_SECRET?.trim();
+  const tenantId = process.env.AZURE_TENANT_ID?.trim() || "common";
+
+  if (!clientId || !clientSecret) {
+    return connection.oauth_access_token?.trim() || null;
+  }
+
+  const tokenUrl = `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`;
+  const refreshResponse = await fetch(tokenUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+      scope: "offline_access openid profile email Mail.Read Calendars.ReadWrite",
+    }),
+  });
+
+  if (!refreshResponse.ok) {
+    return connection.oauth_access_token?.trim() || null;
+  }
+
+  const payload = (await refreshResponse.json()) as { access_token?: string };
+  return payload.access_token?.trim() || connection.oauth_access_token?.trim() || null;
+}
+
+async function fetchOutlookMailboxEmail(accessToken: string) {
+  const response = await fetch("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json()) as OutlookMailboxProfileResponse;
+  const candidate = payload.mail?.trim().toLowerCase() || payload.userPrincipalName?.trim().toLowerCase() || "";
+
+  return candidate.includes("@") ? candidate : null;
 }
 
 async function fetchGmailMessage(accessToken: string, messageId: string) {
@@ -548,6 +749,16 @@ function normalizeSenderEmail(headers: Array<{ name?: string; value?: string }>)
   return candidate;
 }
 
+function normalizeOutlookSenderEmail(message: OutlookMessageResponse) {
+  const candidate = message.from?.emailAddress?.address?.trim().toLowerCase() || "";
+
+  if (!candidate.includes("@")) {
+    return null;
+  }
+
+  return candidate;
+}
+
 function getHeaderValue(headers: Array<{ name?: string; value?: string }>, name: string) {
   const normalizedName = name.toLowerCase();
 
@@ -581,6 +792,32 @@ function resolveOccurredAt(message: GmailMessageResponse) {
   return new Date().toISOString();
 }
 
+function extractOutlookMessageBody(message: OutlookMessageResponse) {
+  const content = message.body?.content?.trim();
+
+  if (content) {
+    return message.body?.contentType?.toLowerCase() === "html"
+      ? content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+      : content;
+  }
+
+  const preview = message.bodyPreview?.trim();
+  return preview || null;
+}
+
+function resolveOutlookOccurredAt(message: OutlookMessageResponse) {
+  const candidate = message.receivedDateTime?.trim() || message.sentDateTime?.trim() || "";
+
+  if (candidate) {
+    const parsed = new Date(candidate);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+
+  return new Date().toISOString();
+}
+
 function resolveAfterUnixSeconds(lastSyncedAt: string | null) {
   if (!lastSyncedAt) {
     // Backfill a short recent window on first sync to avoid long, expensive pulls.
@@ -595,6 +832,24 @@ function resolveAfterUnixSeconds(lastSyncedAt: string | null) {
 
   // Rewind 5 minutes to avoid missing messages around clock edges.
   return Math.max(0, Math.floor(parsed / 1000) - 300);
+}
+
+function resolveOutlookReceivedAfter(lastSyncedAt: string | null) {
+  if (!lastSyncedAt) {
+    return new Date(Date.now() - 60 * 60 * 24 * 1000).toISOString();
+  }
+
+  const parsed = new Date(lastSyncedAt).getTime();
+
+  if (Number.isNaN(parsed)) {
+    return new Date(Date.now() - 60 * 60 * 24 * 1000).toISOString();
+  }
+
+  return new Date(Math.max(0, parsed - 300_000)).toISOString();
+}
+
+function resolveOutlookReceivedAfterMs(lastSyncedAt: string | null) {
+  return new Date(resolveOutlookReceivedAfter(lastSyncedAt)).getTime();
 }
 
 export async function getConnectionsToSync(params: {

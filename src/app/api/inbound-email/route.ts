@@ -433,6 +433,8 @@ export async function POST(request: NextRequest) {
 
   const confidenceRatio = clamp01(triage.confidence / 100);
   const summaryText = normalizeSummaryToThreeSentences(triage.summary);
+  const effectiveAction: z.infer<typeof triageOutputSchema>["action"] =
+    triage.action === "needs_review" && primaryContactId ? "save_summary" : triage.action;
 
   const creditCheck = await supabase.rpc("get_workspace_credit_balance", {
     p_workspace_id: workspaceId,
@@ -500,7 +502,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (triage.action === "save_summary") {
+  if (effectiveAction === "save_summary") {
     let summaryChargeBalance: number | null = null;
     const summaryChargeAmount =
       SUMMARY_CREDIT_COST + (includeSentMailForSummaries ? INCLUDE_SENT_SUMMARY_SURCHARGE : 0);
@@ -537,6 +539,7 @@ export async function POST(request: NextRequest) {
           source: "inbound_email_webhook",
           billing_error: billingError,
           triage_action: triage.action,
+          effective_action: effectiveAction,
         },
       });
 
@@ -567,6 +570,7 @@ export async function POST(request: NextRequest) {
         sender_email_hash: senderEmailHash,
         source: "inbound_email_webhook",
         context_summary_count: contextRows.length,
+        original_triage_action: triage.action,
       } satisfies JsonRecord,
     });
 
@@ -598,6 +602,7 @@ export async function POST(request: NextRequest) {
           model_provider: modelSelection.provider,
           model_name: modelSelection.model,
           triage_action: triage.action,
+          effective_action: effectiveAction,
         },
       });
 
@@ -623,8 +628,8 @@ export async function POST(request: NextRequest) {
       provider,
       message_id_hash: messageIdHash,
       thread_id_hash: threadIdHash,
-      processing_status: statusByAction[triage.action],
-      triage_label: triage.action,
+      processing_status: statusByAction[effectiveAction],
+      triage_label: effectiveAction,
       triage_reason_code: triage.reason,
       triage_confidence: confidenceRatio,
       occurred_at: receivedAt,
@@ -634,6 +639,7 @@ export async function POST(request: NextRequest) {
         model_provider: modelSelection.provider,
         model_name: modelSelection.model,
         matched_contact_count: contactIds.length,
+        original_triage_action: triage.action,
       } satisfies JsonRecord,
     });
 
@@ -647,7 +653,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(
     {
       ok: true,
-      action: triage.action,
+      action: effectiveAction,
       confidence: triage.confidence,
       newBalance,
     },

@@ -4,7 +4,9 @@ import {
   getSupabaseAdminClient,
   isMailboxReconnectRequired,
   resolveGmailAccessToken,
+  resolveOutlookAccessToken,
   syncOneGmailMailbox,
+  syncOneOutlookMailbox,
   type MailboxConnectionRow,
 } from "../route";
 
@@ -133,7 +135,7 @@ async function processOneMailboxSyncJob(params: {
     return { ok: false, reason };
   }
 
-  if (connectionData.provider !== "gmail") {
+  if (connectionData.provider !== "gmail" && connectionData.provider !== "outlook") {
     const reason = "Unsupported mailbox provider";
     await finalizeMailboxSyncJob(params.supabaseAdmin, params.job.id, "failed", 0, 0, null, reason);
     return { ok: false, reason };
@@ -146,22 +148,34 @@ async function processOneMailboxSyncJob(params: {
   }
 
   try {
-    const accessToken = await resolveGmailAccessToken(connectionData);
+    const accessToken =
+      connectionData.provider === "outlook"
+        ? await resolveOutlookAccessToken(connectionData)
+        : await resolveGmailAccessToken(connectionData);
     const resolvedAccessToken = accessToken || connectionData.oauth_access_token || null;
 
     if (!resolvedAccessToken) {
       throw new Error(
-        "No Gmail access token available. Reconnect mailbox before running the worker again.",
+        `No ${connectionData.provider === "outlook" ? "Outlook" : "Gmail"} access token available. Reconnect mailbox before running the worker again.`,
       );
     }
 
-    const syncResult = await syncOneGmailMailbox({
-      requestUrl: params.requestUrl,
-      supabaseAdmin: params.supabaseAdmin,
-      connection: connectionData,
-      accessToken: resolvedAccessToken,
-      inboundSecret: params.inboundSecret,
-    });
+    const syncResult =
+      connectionData.provider === "outlook"
+        ? await syncOneOutlookMailbox({
+            requestUrl: params.requestUrl,
+            supabaseAdmin: params.supabaseAdmin,
+            connection: connectionData,
+            accessToken: resolvedAccessToken,
+            inboundSecret: params.inboundSecret,
+          })
+        : await syncOneGmailMailbox({
+            requestUrl: params.requestUrl,
+            supabaseAdmin: params.supabaseAdmin,
+            connection: connectionData,
+            accessToken: resolvedAccessToken,
+            inboundSecret: params.inboundSecret,
+          });
 
     await params.supabaseAdmin
       .from("mailbox_connections")
