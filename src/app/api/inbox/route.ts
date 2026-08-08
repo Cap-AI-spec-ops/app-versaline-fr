@@ -7,7 +7,11 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
+const INBOX_LIST_MAX_RESULTS = 40;
+const GMAIL_DETAIL_FETCH_CONCURRENCY = 12;
+
 type MailProvider = "gmail" | "outlook";
+type MailboxView = "inbox" | "archive" | "drafts" | "deleted";
 
 type MailboxConnectionRow = {
   id: string;
@@ -68,7 +72,9 @@ type InboxThreadMessage = {
   subject: string;
   from: string;
   to: string;
+  cc: string;
   body: string;
+  bodyHtml: string | null;
   receivedAt: string;
   isUnread: boolean;
 };
@@ -105,16 +111,38 @@ type InboxActionRequest =
       provider: MailProvider;
       messageId: string;
       body: string;
+      bodyHtml?: string;
+    }
+  | {
+      action: "reply_all";
+      provider: MailProvider;
+      messageId: string;
+      body: string;
+      bodyHtml?: string;
+    }
+  | {
+      action: "send_new";
+      provider: MailProvider;
+      to: string;
+      cc?: string;
+      subject: string;
+      body: string;
+      bodyHtml?: string;
     };
 
 export async function GET(request: NextRequest) {
   const view = request.nextUrl.searchParams.get("view")?.trim() ?? "list";
+  const mailbox = request.nextUrl.searchParams.get("mailbox")?.trim() ?? "inbox";
 
   if (view === "thread") {
     return getThreadView(request);
   }
 
-  return getListView();
+  if (mailbox !== "inbox" && mailbox !== "archive" && mailbox !== "drafts" && mailbox !== "deleted") {
+    return NextResponse.json({ error: "Invalid mailbox view" }, { status: 400 });
+  }
+
+  return getListView(mailbox as MailboxView);
 }
 
 export async function POST(request: NextRequest) {
@@ -216,20 +244,50 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, assignedToProfileId });
   }
 
-  if (payload.action === "reply") {
+  if (payload.action === "reply" || payload.action === "reply_all") {
     const trimmedBody = payload.body.trim();
+    const trimmedBodyHtml = typeof payload.bodyHtml === "string" && payload.bodyHtml.trim() ? payload.bodyHtml.trim() : null;
 
     if (trimmedBody.length < 2) {
       return NextResponse.json({ error: "Reply message must contain at least 2 characters." }, { status: 422 });
     }
 
-    return runReplyAction(payload.provider, payload.messageId, trimmedBody, accessToken);
+    return runReplyAction(
+      payload.provider,
+      payload.messageId,
+      trimmedBody,
+      trimmedBodyHtml,
+      accessToken,
+      payload.action === "reply_all",
+    );
+  }
+
+  if (payload.action === "send_new") {
+    const toRecipients = extractEmailAddresses(payload.to);
+    const ccRecipients = extractEmailAddresses(payload.cc ?? "");
+    const subject = payload.subject.trim();
+    const body = payload.body.trim();
+    const bodyHtml = typeof payload.bodyHtml === "string" && payload.bodyHtml.trim() ? payload.bodyHtml.trim() : null;
+
+    if (toRecipients.length === 0) {
+      return NextResponse.json({ error: "At least one To recipient is required." }, { status: 422 });
+    }
+
+    if (subject.length < 1) {
+      return NextResponse.json({ error: "Subject is required." }, { status: 422 });
+    }
+
+    if (body.length < 2) {
+      return NextResponse.json({ error: "Message body must contain at least 2 characters." }, { status: 422 });
+    }
+
+    return runComposeAction(payload.provider, toRecipients, ccRecipients, subject, body, bodyHtml, accessToken);
   }
 
   return NextResponse.json({ error: "Unsupported action" }, { status: 400 });
 }
 
-async function getListView() {
+async function getListView(mailbox: MailboxView) {
   try {
     const context = await resolveInboxContext();
 
@@ -246,46 +304,55 @@ async function getListView() {
       );
     }
 
-    for (const connection of context.connections) {
-      try {
-        const accessToken = await resolveConnectionAccessToken(connection);
+    const providerResults = await Promise.all(
+      context.connections.map(async (connection) => {
+        try {
+          const accessToken = await resolveConnectionAccessToken(connection);
 
-        if (!accessToken) {
-          warnings.push(`${connection.provider} mailbox token unavailable. Reconnect mailbox in settings.`);
-          continue;
-        }
-
-        if (connection.provider === "gmail") {
-          const gmailMessages = await listGmailMessages(accessToken);
-          const diagnostic = context.connectionDiagnostics.find((entry) => entry.provider === "gmail");
-
-          if (diagnostic) {
-            diagnostic.fetchedCount = gmailMessages.length;
+          if (!accessToken) {
+            return {
+              provider: connection.provider,
+              messages: [] as InboxMessage[],
+              warning: `${connection.provider} mailbox token unavailable. Reconnect mailbox in settings.`,
+            };
           }
 
-          for (const message of gmailMessages) {
-            messagesByKey.set(`${message.provider}:${message.messageId}`, message);
-          }
+          const providerMessages =
+            connection.provider === "gmail"
+              ? await listGmailMessages(accessToken, mailbox)
+              : await listOutlookMessages(accessToken, mailbox);
 
-          continue;
+          return {
+            provider: connection.provider,
+            messages: providerMessages,
+            warning: null,
+          };
+        } catch (providerError) {
+          return {
+            provider: connection.provider,
+            messages: [] as InboxMessage[],
+            warning:
+              providerError instanceof Error
+                ? providerError.message
+                : `Could not load ${connection.provider} messages.`,
+          };
         }
+      }),
+    );
 
-        const outlookMessages = await listOutlookMessages(accessToken);
-        const diagnostic = context.connectionDiagnostics.find((entry) => entry.provider === "outlook");
+    for (const result of providerResults) {
+      const diagnostic = context.connectionDiagnostics.find((entry) => entry.provider === result.provider);
 
-        if (diagnostic) {
-          diagnostic.fetchedCount = outlookMessages.length;
-        }
+      if (diagnostic) {
+        diagnostic.fetchedCount = result.messages.length;
+      }
 
-        for (const message of outlookMessages) {
-          messagesByKey.set(`${message.provider}:${message.messageId}`, message);
-        }
-      } catch (providerError) {
-        warnings.push(
-          providerError instanceof Error
-            ? providerError.message
-            : `Could not load ${connection.provider} messages.`,
-        );
+      if (result.warning) {
+        warnings.push(result.warning);
+      }
+
+      for (const message of result.messages) {
+        messagesByKey.set(`${message.provider}:${message.messageId}`, message);
       }
     }
 
@@ -423,7 +490,17 @@ async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContext
   }
 
   const allConnections = (connectionsResult.data ?? []) as MailboxConnectionRow[];
-  const connections = allConnections.filter((connection) => connection.status === "connected");
+  const connectedConnections = allConnections
+    .filter((connection) => connection.status === "connected")
+    .sort((left, right) => {
+      const leftTs = Date.parse(left.last_synced_at ?? left.oauth_token_updated_at ?? "");
+      const rightTs = Date.parse(right.last_synced_at ?? right.oauth_token_updated_at ?? "");
+      const safeLeft = Number.isNaN(leftTs) ? 0 : leftTs;
+      const safeRight = Number.isNaN(rightTs) ? 0 : rightTs;
+      return safeRight - safeLeft;
+    });
+  // Single-provider mode: each user mailbox is either Gmail or Outlook.
+  const connections = connectedConnections.length > 0 ? [connectedConnections[0]] : [];
   const connectionDiagnostics: ConnectionDiagnostic[] = allConnections.map((connection) => ({
     provider: connection.provider,
     status: connection.status,
@@ -473,10 +550,14 @@ async function resolveConnectionAccessToken(connection: MailboxConnectionRow) {
   return (await resolveOutlookAccessToken(connection)) || connection.oauth_access_token || null;
 }
 
-async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
+async function listGmailMessages(accessToken: string, mailbox: MailboxView): Promise<InboxMessage[]> {
+  if (mailbox === "drafts") {
+    return listGmailDraftMessages(accessToken);
+  }
+
   const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-  listUrl.searchParams.set("maxResults", "30");
-  listUrl.searchParams.set("q", "newer_than:180d");
+  listUrl.searchParams.set("maxResults", String(INBOX_LIST_MAX_RESULTS));
+  listUrl.searchParams.set("q", buildGmailMailboxQuery(mailbox));
 
   const listResponse = await fetch(listUrl.toString(), {
     headers: {
@@ -493,16 +574,17 @@ async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
     messages?: Array<{ id?: string; threadId?: string }>;
   };
 
-  const messages: InboxMessage[] = [];
+  const rawItems = (listPayload.messages ?? []).map((item) => ({
+    messageId: item.id?.trim() ?? "",
+    threadId: item.threadId?.trim() || null,
+  }));
 
-  for (const item of listPayload.messages ?? []) {
-    const messageId = item.id?.trim();
-
-    if (!messageId) {
-      continue;
+  const hydrated = await mapWithConcurrency(rawItems, GMAIL_DETAIL_FETCH_CONCURRENCY, async (item) => {
+    if (!item.messageId) {
+      return null;
     }
 
-    const messageUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}`);
+    const messageUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(item.messageId)}`);
     messageUrl.searchParams.set("format", "metadata");
     messageUrl.searchParams.append("metadataHeaders", "From");
     messageUrl.searchParams.append("metadataHeaders", "Subject");
@@ -516,7 +598,7 @@ async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
     });
 
     if (!messageResponse.ok) {
-      continue;
+      return null;
     }
 
     const payload = (await messageResponse.json()) as {
@@ -543,10 +625,10 @@ async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
           : new Date().toISOString();
     const labelSet = new Set(payload.labelIds ?? []);
 
-    messages.push({
-      key: `gmail:${payload.id ?? messageId}`,
-      provider: "gmail",
-      messageId: payload.id ?? messageId,
+    return {
+      key: `gmail:${payload.id ?? item.messageId}`,
+      provider: "gmail" as const,
+      messageId: payload.id ?? item.messageId,
       threadId: payload.threadId ?? item.threadId ?? null,
       subject,
       from,
@@ -555,25 +637,25 @@ async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
       isUnread: labelSet.has("UNREAD"),
       isArchived: !labelSet.has("INBOX"),
       assignedToProfileId: null,
-    });
-  }
+    };
+  });
 
-  return messages;
+  return hydrated.filter((entry): entry is InboxMessage => entry !== null);
 }
 
-async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]> {
-  const listUrl = new URL("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages");
-  listUrl.searchParams.set("$top", "30");
+async function listOutlookMessages(accessToken: string, mailbox: MailboxView): Promise<InboxMessage[]> {
+  const listUrl = new URL(`https://graph.microsoft.com/v1.0/me/mailFolders/${getOutlookFolderName(mailbox)}/messages`);
+  listUrl.searchParams.set("$top", String(INBOX_LIST_MAX_RESULTS));
   listUrl.searchParams.set("$orderby", "receivedDateTime desc");
   listUrl.searchParams.set(
     "$select",
-    "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead,parentFolderId",
+    "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead",
   );
 
   const response = await fetch(listUrl.toString(), {
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      Prefer: 'outlook.body-content-type="text"',
+      Prefer: `outlook.body-content-type="text", odata.maxpagesize=${INBOX_LIST_MAX_RESULTS}`,
     },
     cache: "no-store",
   });
@@ -600,19 +682,19 @@ async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]>
     }>;
   };
 
-  if (!Array.isArray(payload.value) || payload.value.length === 0) {
+  if (mailbox === "inbox" && (!Array.isArray(payload.value) || payload.value.length === 0)) {
     const fallbackUrl = new URL("https://graph.microsoft.com/v1.0/me/messages");
-    fallbackUrl.searchParams.set("$top", "30");
+    fallbackUrl.searchParams.set("$top", String(INBOX_LIST_MAX_RESULTS));
     fallbackUrl.searchParams.set("$orderby", "receivedDateTime desc");
     fallbackUrl.searchParams.set(
       "$select",
-      "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead,parentFolderId",
+      "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead",
     );
 
     const fallbackResponse = await fetch(fallbackUrl.toString(), {
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        Prefer: 'outlook.body-content-type="text"',
+        Prefer: `outlook.body-content-type="text", odata.maxpagesize=${INBOX_LIST_MAX_RESULTS}`,
       },
       cache: "no-store",
     });
@@ -666,6 +748,150 @@ async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]>
   }
 
   return messages;
+}
+
+async function listGmailDraftMessages(accessToken: string): Promise<InboxMessage[]> {
+  const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/drafts");
+  listUrl.searchParams.set("maxResults", String(INBOX_LIST_MAX_RESULTS));
+
+  const listResponse = await fetch(listUrl.toString(), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!listResponse.ok) {
+    throw new Error(await parseProviderError("gmail", listResponse));
+  }
+
+  const listPayload = (await listResponse.json()) as {
+    drafts?: Array<{ id?: string; message?: { id?: string; threadId?: string } }>;
+  };
+
+  const draftIds = (listPayload.drafts ?? []).map((item) => item.id?.trim() ?? "");
+
+  const hydrated = await mapWithConcurrency(draftIds, GMAIL_DETAIL_FETCH_CONCURRENCY, async (draftId) => {
+    if (!draftId) {
+      return null;
+    }
+
+    const draftUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(draftId)}`);
+    draftUrl.searchParams.set("format", "full");
+
+    const draftResponse = await fetch(draftUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!draftResponse.ok) {
+      return null;
+    }
+
+    const payload = (await draftResponse.json()) as {
+      id?: string;
+      message?: {
+        id?: string;
+        threadId?: string;
+        snippet?: string;
+        internalDate?: string;
+        payload?: {
+          headers?: Array<{ name?: string; value?: string }>;
+        };
+      };
+    };
+
+    const draftMessage = payload.message;
+    const messageId = draftMessage?.id?.trim();
+
+    if (!messageId) {
+      return null;
+    }
+
+    const headers = draftMessage.payload?.headers ?? [];
+    const from = findHeader(headers, "from") || "Draft";
+    const subject = findHeader(headers, "subject") || "(No subject)";
+    const dateHeader = findHeader(headers, "date");
+    const parsedDate = dateHeader ? new Date(dateHeader) : null;
+    const timestamp =
+      parsedDate && !Number.isNaN(parsedDate.getTime())
+        ? parsedDate.toISOString()
+        : draftMessage.internalDate && !Number.isNaN(Number(draftMessage.internalDate))
+          ? new Date(Number(draftMessage.internalDate)).toISOString()
+          : new Date().toISOString();
+
+    return {
+      key: `gmail:${messageId}`,
+      provider: "gmail" as const,
+      messageId,
+      threadId: draftMessage.threadId?.trim() || null,
+      subject,
+      from,
+      snippet: (draftMessage.snippet ?? "").trim(),
+      receivedAt: timestamp,
+      isUnread: false,
+      isArchived: false,
+      assignedToProfileId: null,
+    };
+  });
+
+  return hydrated.filter((entry): entry is InboxMessage => entry !== null);
+}
+
+function buildGmailMailboxQuery(mailbox: MailboxView) {
+  if (mailbox === "archive") {
+    return "-in:inbox -in:trash -in:spam newer_than:180d";
+  }
+
+  if (mailbox === "deleted") {
+    return "in:trash newer_than:180d";
+  }
+
+  return "in:inbox newer_than:180d";
+}
+
+function getOutlookFolderName(mailbox: MailboxView) {
+  if (mailbox === "archive") {
+    return "archive";
+  }
+
+  if (mailbox === "drafts") {
+    return "drafts";
+  }
+
+  if (mailbox === "deleted") {
+    return "deleteditems";
+  }
+
+  return "inbox";
+}
+
+async function mapWithConcurrency<TInput, TOutput>(
+  values: TInput[],
+  concurrency: number,
+  mapper: (value: TInput, index: number) => Promise<TOutput>,
+) {
+  const results: TOutput[] = new Array(values.length);
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+
+      if (index >= values.length) {
+        return;
+      }
+
+      results[index] = await mapper(values[index], index);
+    }
+  };
+
+  const workerCount = Math.max(1, Math.min(concurrency, values.length || 1));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 async function loadAssignments(
@@ -747,11 +973,11 @@ async function getGmailThread(accessToken: string, messageId: string, threadId: 
 async function getOutlookThread(accessToken: string, messageId: string, threadId: string | null): Promise<InboxThreadMessage[]> {
   if (!threadId) {
     const response = await fetch(
-      `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(messageId)}?$select=id,conversationId,subject,body,from,toRecipients,receivedDateTime,isRead`,
+      `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(messageId)}?$select=id,conversationId,subject,body,from,toRecipients,ccRecipients,receivedDateTime,isRead`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          Prefer: 'outlook.body-content-type="text"',
+          Prefer: 'outlook.body-content-type="html"',
         },
         cache: "no-store",
       },
@@ -771,13 +997,13 @@ async function getOutlookThread(accessToken: string, messageId: string, threadId
   url.searchParams.set("$filter", `conversationId eq '${threadId.replace(/'/g, "''")}'`);
   url.searchParams.set(
     "$select",
-    "id,conversationId,subject,body,from,toRecipients,receivedDateTime,isRead",
+    "id,conversationId,subject,body,from,toRecipients,ccRecipients,receivedDateTime,isRead",
   );
 
   const response = await fetch(url.toString(), {
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      Prefer: 'outlook.body-content-type="text"',
+      Prefer: 'outlook.body-content-type="html"',
     },
     cache: "no-store",
   });
@@ -901,9 +1127,17 @@ async function runArchiveAction(provider: MailProvider, messageId: string, acces
   return NextResponse.json({ ok: true });
 }
 
-async function runReplyAction(provider: MailProvider, messageId: string, body: string, accessToken: string) {
+async function runReplyAction(
+  provider: MailProvider,
+  messageId: string,
+  body: string,
+  bodyHtml: string | null,
+  accessToken: string,
+  replyAll: boolean,
+) {
   if (provider === "outlook") {
-    const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(messageId)}/reply`, {
+    const outlookAction = replyAll ? "replyAll" : "reply";
+    const response = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(messageId)}/${outlookAction}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -925,22 +1159,47 @@ async function runReplyAction(provider: MailProvider, messageId: string, body: s
   const headers = originalMessage.payload?.headers ?? [];
   const subject = findHeader(headers, "subject") || "(No subject)";
   const from = findHeader(headers, "from") || "";
+  const replyTo = findHeader(headers, "reply-to") || "";
+  const toHeader = findHeader(headers, "to") || "";
+  const ccHeader = findHeader(headers, "cc") || "";
   const messageHeaderId = findHeader(headers, "message-id") || "";
-  const recipient = extractEmailAddress(from);
+  const primaryReplyTarget = extractEmailAddress(replyTo || from);
 
-  if (!recipient) {
+  if (!primaryReplyTarget) {
     return NextResponse.json({ error: "Could not resolve recipient for Gmail reply." }, { status: 422 });
+  }
+
+  let toRecipients = [primaryReplyTarget];
+  let ccRecipients: string[] = [];
+
+  if (replyAll) {
+    const mailboxAccount = (await resolveMailboxAccountEmail("gmail", accessToken))?.toLowerCase() ?? null;
+    const allRecipients = dedupeEmailList([
+      ...extractEmailAddresses(replyTo || from),
+      ...extractEmailAddresses(toHeader),
+      ...extractEmailAddresses(ccHeader),
+    ]).filter((address) => address.toLowerCase() !== mailboxAccount);
+
+    if (allRecipients.length === 0) {
+      allRecipients.push(primaryReplyTarget);
+    }
+
+    toRecipients = [allRecipients[0]];
+    ccRecipients = allRecipients.slice(1);
   }
 
   const normalizedSubject = subject.toLowerCase().startsWith("re:") ? subject : `Re: ${subject}`;
   const rawMessage = [
-    `To: ${recipient}`,
+    `To: ${toRecipients.join(", ")}`,
+    ...(ccRecipients.length > 0 ? [`Cc: ${ccRecipients.join(", ")}`] : []),
     `Subject: ${normalizedSubject}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
+    bodyHtml
+      ? 'Content-Type: text/html; charset="UTF-8"'
+      : 'Content-Type: text/plain; charset="UTF-8"',
     ...(messageHeaderId ? [`In-Reply-To: ${messageHeaderId}`, `References: ${messageHeaderId}`] : []),
     "",
-    body,
+    bodyHtml ?? body,
   ].join("\r\n");
 
   const encodedRaw = Buffer.from(rawMessage)
@@ -963,6 +1222,86 @@ async function runReplyAction(provider: MailProvider, messageId: string, body: s
 
   if (!sendResponse.ok) {
     return NextResponse.json({ error: await parseProviderError("gmail", sendResponse) }, { status: sendResponse.status });
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+async function runComposeAction(
+  provider: MailProvider,
+  toRecipients: string[],
+  ccRecipients: string[],
+  subject: string,
+  body: string,
+  bodyHtml: string | null,
+  accessToken: string,
+) {
+  if (provider === "outlook") {
+    const response = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: {
+            contentType: bodyHtml ? "HTML" : "Text",
+            content: bodyHtml ?? body,
+          },
+          toRecipients: toRecipients.map((address) => ({
+            emailAddress: {
+              address,
+            },
+          })),
+          ccRecipients: ccRecipients.map((address) => ({
+            emailAddress: {
+              address,
+            },
+          })),
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      return NextResponse.json({ error: await parseProviderError("outlook", response) }, { status: response.status });
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
+  const rawMessage = [
+    `To: ${toRecipients.join(", ")}`,
+    ...(ccRecipients.length > 0 ? [`Cc: ${ccRecipients.join(", ")}`] : []),
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    bodyHtml
+      ? 'Content-Type: text/html; charset="UTF-8"'
+      : 'Content-Type: text/plain; charset="UTF-8"',
+    "",
+    bodyHtml ?? body,
+  ].join("\r\n");
+
+  const encodedRaw = Buffer.from(rawMessage)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      raw: encodedRaw,
+    }),
+  });
+
+  if (!response.ok) {
+    return NextResponse.json({ error: await parseProviderError("gmail", response) }, { status: response.status });
   }
 
   return NextResponse.json({ ok: true });
@@ -1006,6 +1345,12 @@ type OutlookFullMessage = {
       address?: string;
     };
   }>;
+  ccRecipients?: Array<{
+    emailAddress?: {
+      name?: string;
+      address?: string;
+    };
+  }>;
   receivedDateTime?: string;
   isRead?: boolean;
 };
@@ -1013,6 +1358,7 @@ type OutlookFullMessage = {
 function parseGmailThreadMessage(message: GmailFullMessage): InboxThreadMessage {
   const headers = message.payload?.headers ?? [];
   const extractedBody = extractGmailBodyText(message.payload);
+  const htmlBody = extractGmailHtmlBody(message.payload);
   const body = selectReadableBody(extractedBody, message.snippet || "");
   const dateHeader = findHeader(headers, "date");
   const dateValue = dateHeader ? new Date(dateHeader) : null;
@@ -1025,7 +1371,9 @@ function parseGmailThreadMessage(message: GmailFullMessage): InboxThreadMessage 
     subject: findHeader(headers, "subject") || "(No subject)",
     from: findHeader(headers, "from") || "Unknown sender",
     to: findHeader(headers, "to") || "",
+    cc: findHeader(headers, "cc") || "",
     body,
+    bodyHtml: htmlBody || null,
     receivedAt:
       dateValue && !Number.isNaN(dateValue.getTime())
         ? dateValue.toISOString()
@@ -1037,7 +1385,12 @@ function parseGmailThreadMessage(message: GmailFullMessage): InboxThreadMessage 
 }
 
 function parseOutlookThreadMessage(message: OutlookFullMessage): InboxThreadMessage {
+  const htmlBody = message.body?.content?.trim() || "";
   const toLine = (message.toRecipients ?? [])
+    .map((recipient) => recipient.emailAddress?.name?.trim() || recipient.emailAddress?.address?.trim() || "")
+    .filter(Boolean)
+    .join(", ");
+  const ccLine = (message.ccRecipients ?? [])
     .map((recipient) => recipient.emailAddress?.name?.trim() || recipient.emailAddress?.address?.trim() || "")
     .filter(Boolean)
     .join(", ");
@@ -1050,7 +1403,9 @@ function parseOutlookThreadMessage(message: OutlookFullMessage): InboxThreadMess
     from:
       message.from?.emailAddress?.name?.trim() || message.from?.emailAddress?.address?.trim() || "Unknown sender",
     to: toLine,
-    body: (message.body?.content ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+    cc: ccLine,
+    body: htmlToPlainText(htmlBody),
+    bodyHtml: htmlBody || null,
     receivedAt: message.receivedDateTime?.trim() || new Date().toISOString(),
     isUnread: !Boolean(message.isRead),
   };
@@ -1124,6 +1479,27 @@ function extractGmailBodyText(payload: GmailFullMessage["payload"] | undefined):
   return "";
 }
 
+function extractGmailHtmlBody(payload: GmailFullMessage["payload"] | undefined): string {
+  if (!payload) {
+    return "";
+  }
+
+  const htmlBody = findPreferredGmailBody(payload, "text/html");
+
+  if (htmlBody) {
+    return htmlBody;
+  }
+
+  for (const part of payload.parts ?? []) {
+    const value = extractNestedHtmlBody(part);
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
 function findPreferredGmailBody(part: GmailPayloadPart, mimeType: "text/plain" | "text/html"): string {
   const normalizedMime = part.mimeType?.toLowerCase() ?? "";
 
@@ -1150,6 +1526,24 @@ function extractNestedBody(part: GmailPayloadPart): string {
     }
 
     const nested = extractNestedBody(child);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return "";
+}
+
+function extractNestedHtmlBody(part: GmailPayloadPart): string {
+  for (const child of part.parts ?? []) {
+    if (child.mimeType?.toLowerCase() === "text/html") {
+      const value = decodeGmailData(child.body?.data);
+      if (value) {
+        return value;
+      }
+    }
+
+    const nested = extractNestedHtmlBody(child);
     if (nested) {
       return nested;
     }
@@ -1214,24 +1608,101 @@ function normalizeEmailBody(raw: string, isHtml: boolean) {
         .replace(/<head[\s\S]*?<\/head>/gi, " ")
         .replace(/<!\[if[\s\S]*?<!\[endif\]>/gi, " ")
         .replace(/<!--([\s\S]*?)-->/g, " ")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/(p|div|tr|table|section|article|h[1-6])>/gi, "\n")
+        .replace(/<li[^>]*>/gi, "\n- ")
+        .replace(/<\/(li|td)>/gi, " ")
+        .replace(/<(td|th)[^>]*>/gi, " ")
         .replace(/<[^>]+>/g, " ")
     : raw;
 
   const withoutNoise = source
     .replace(/https?:\/\/\S+/g, " ")
     .replace(/@font-face\{[\s\S]*?\}/gi, " ")
-    .replace(/@media[\s\S]*?\{[\s\S]*?\}/gi, " ")
+    .replace(/@media[\s\S]*?\{[\s\S]*?\}/gi, "\n")
     .replace(/[A-Za-z0-9_-]+\{[^{}]{20,}\}/g, " ");
 
   const decodedEntities = decodeHtmlEntities(withoutNoise);
 
-  return decodedEntities
+  const normalized = decodedEntities
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/\s+/g, " ")
+    .replace(/\r/g, "")
     .trim();
+
+  if (!isHtml) {
+    return normalized.replace(/\s+/g, " ").trim();
+  }
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((line) => !isNoiseLine(line));
+
+  const compactedLines = lines.filter((line, index) => {
+    if (index === 0) {
+      return true;
+    }
+
+    return line !== lines[index - 1];
+  });
+
+  const trimmedLines = trimFooterLines(compactedLines);
+  return trimmedLines.join("\n\n").trim();
+}
+
+function htmlToPlainText(value: string) {
+  if (!value) {
+    return "";
+  }
+
+  return value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function isNoiseLine(line: string) {
+  const normalized = line.toLowerCase();
+
+  return (
+    normalized.includes("not(#outlook)") ||
+    normalized.includes("@media") ||
+    normalized.includes("font-face") ||
+    normalized.includes("!important") ||
+    normalized.includes("table{zoom") ||
+    normalized.includes("converted-body") ||
+    normalized.includes("mso-hide")
+  );
+}
+
+function trimFooterLines(lines: string[]) {
+  if (lines.length < 6) {
+    return lines;
+  }
+
+  const footerMarkers = [
+    "unsubscribe",
+    "se desinscrire",
+    "se désinscrire",
+    "manage preferences",
+    "instagram",
+    "youtube",
+    "linkedin",
+    "tiktok",
+    "reddit",
+    "support",
+  ];
+
+  for (let index = Math.floor(lines.length * 0.5); index < lines.length; index += 1) {
+    const line = lines[index]?.toLowerCase() ?? "";
+
+    if (footerMarkers.some((marker) => line.includes(marker))) {
+      return lines.slice(0, index);
+    }
+  }
+
+  return lines;
 }
 
 function decodeHtmlEntities(value: string) {
@@ -1274,14 +1745,43 @@ function selectReadableBody(body: string, snippet: string) {
   const normalizedSnippet = normalizeEmailBody(snippet, false);
 
   if (!normalizedBody) {
-    return normalizedSnippet;
+    return formatReadablePlainText(normalizedSnippet);
   }
 
   if (looksLikeCssNoise(normalizedBody) && normalizedSnippet.length > 0) {
-    return normalizedSnippet;
+    return formatReadablePlainText(normalizedSnippet);
   }
 
-  return normalizedBody;
+  return formatReadablePlainText(normalizedBody);
+}
+
+function formatReadablePlainText(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  const withBullets = trimmed
+    .replace(/\s-\s(?=[A-Z0-9])/g, "\n- ")
+    .replace(/\s•\s/g, "\n- ");
+
+  const withSectionBreaks = withBullets
+    .replace(/:\s(?=[A-Z])/g, ":\n")
+    .replace(/\?\s(?=[A-Z])/g, "?\n")
+    .replace(/\!\s(?=[A-Z])/g, "!\n");
+
+  // If provider body comes as one very long line, break after sentence boundaries.
+  const forceSentenceBreaks =
+    withSectionBreaks.includes("\n")
+      ? withSectionBreaks
+      : withSectionBreaks.replace(/\.\s(?=[A-Z])/g, ".\n");
+
+  return forceSentenceBreaks
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function extractEmailAddress(value: string) {
@@ -1293,6 +1793,39 @@ function extractEmailAddress(value: string) {
   }
 
   return candidate;
+}
+
+function extractEmailAddresses(value: string) {
+  if (!value.trim()) {
+    return [];
+  }
+
+  const matches = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+  return dedupeEmailList(matches);
+}
+
+function dedupeEmailList(values: string[]) {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+
+  for (const value of values) {
+    const email = value.trim();
+
+    if (!email) {
+      continue;
+    }
+
+    const key = email.toLowerCase();
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(email);
+  }
+
+  return deduped;
 }
 
 async function resolveMailboxAccountEmail(provider: MailProvider, accessToken: string) {

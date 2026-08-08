@@ -136,6 +136,7 @@ export default async function DashboardBriefingCard({ workspaceId, profileId }: 
           <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
             {storedBriefing?.briefing ?? statusMessage}
           </p>
+          {storedBriefing ? <p className="mt-2 text-[11px] text-[var(--muted)]">AI-generated; please verify important information</p> : null}
           {!storedBriefing ? <p className="mt-2 text-xs text-[var(--muted)]">Scheduled at {scheduledTime} ({timezone})</p> : null}
           {fallbackDetails ? <p className="mt-2 text-xs text-amber-700">AI fallback reason: {fallbackDetails}</p> : null}
         </div>
@@ -155,10 +156,10 @@ export default async function DashboardBriefingCard({ workspaceId, profileId }: 
         </div>
       ) : null}
 
-      {includeWorkspaceSnapshot && storedBriefing && storedBriefing.workspacePulse && storedBriefing.stageCounts.length > 0 ? (
+      {includeWorkspaceSnapshot && storedBriefing && storedBriefing.stageCounts.length > 0 ? (
         <div className="mt-6 rounded-2xl border border-[var(--border)] bg-white p-4">
           <p className="text-sm font-semibold text-[var(--foreground)]">Compact workspace summary</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">{storedBriefing.workspacePulse}</p>
+          {storedBriefing.workspacePulse && !storedBriefing.workspacePulse.startsWith("{") ? <p className="mt-1 text-sm text-[var(--muted)]">{storedBriefing.workspacePulse}</p> : null}
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
             {storedBriefing.stageCounts.map((stage) => (
               <span key={stage.key} className="rounded-full border border-[var(--border)] bg-slate-50 px-2.5 py-1 font-semibold text-[var(--foreground)]">

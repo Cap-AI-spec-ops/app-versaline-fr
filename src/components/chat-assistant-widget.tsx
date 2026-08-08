@@ -496,6 +496,9 @@ export function ChatAssistantWidget({ workspaceId, workspaceName }: ChatAssistan
           </div>
 
           <div className="border-t border-[var(--border)] px-4 py-3">
+            <div className="mb-2 px-1 text-center text-[11px] leading-4 text-[var(--muted)]">
+              AI can make mistakes; please verify important information.
+            </div>
             <div className="flex items-end gap-2">
               <textarea
                 value={input}
@@ -521,12 +524,6 @@ export function ChatAssistantWidget({ workspaceId, workspaceName }: ChatAssistan
             </div>
 
             {errorMessage ? <p className="mt-2 text-xs text-red-600">{errorMessage}</p> : null}
-            {!errorMessage && lastChargedCredits !== null ? (
-              <p className="mt-2 text-xs text-[var(--muted)]">
-                Last charge: {lastChargedCredits.toFixed(2)} credit
-                {balanceAfter !== null ? ` | New balance: ${balanceAfter.toFixed(2)}` : ""}
-              </p>
-            ) : null}
           </div>
         </aside>
       ) : null}

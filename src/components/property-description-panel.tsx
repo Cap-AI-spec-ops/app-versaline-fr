@@ -1059,7 +1059,10 @@ export default function PropertyDescriptionPanel() {
           )}
 
           <div className="rounded-2xl border border-[var(--border)] bg-white/80 p-4">
-            <p className="text-sm font-semibold text-[var(--foreground)]">Generated draft</p>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-sm font-semibold text-[var(--foreground)]">Generated draft</p>
+              <p className="text-[11px] text-[var(--muted)]">AI can make mistakes; verify important details</p>
+            </div>
             {editableDraft ? (
               <div className="mt-3 space-y-3">
                 <div>

@@ -149,6 +149,39 @@ export const ACTION_CONFIG = {
     creditCost: 0.1,
     useCache: false,
   },
+  twilio_message_triage: {
+    provider: 'gemini',
+    models: {
+      anthropic: 'claude-3-5-haiku-20241022',
+      gemini: 'gemini-2.5-flash-lite',
+      mistral: 'mistral-small-latest',
+      xai: 'grok-4-fast-reasoning',
+    },
+    creditCost: 0.1,
+    useCache: false,
+  },
+  twilio_message_summary: {
+    provider: 'gemini',
+    models: {
+      anthropic: 'claude-3-5-haiku-20241022',
+      gemini: 'gemini-2.5-flash-lite',
+      mistral: 'mistral-small-latest',
+      xai: 'grok-4-fast-reasoning',
+    },
+    creditCost: 0.1,
+    useCache: false,
+  },
+  twilio_call_summary: {
+    provider: 'gemini',
+    models: {
+      anthropic: 'claude-3-5-haiku-20241022',
+      gemini: 'gemini-2.5-flash',
+      mistral: 'mistral-small-latest',
+      xai: 'grok-4-fast-reasoning',
+    },
+    creditCost: 0.2,
+    useCache: false,
+  },
 } as const satisfies Record<string, ActionConfig>;
 
 export type ActionType = keyof typeof ACTION_CONFIG;

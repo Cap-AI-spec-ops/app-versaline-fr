@@ -24,7 +24,7 @@ type ContactPriority = "low" | "normal" | "high";
 type ContactChannel = "phone" | "email" | "whatsapp" | "sms" | "other";
 
 type ContactEventType = "note" | "call" | "email" | "meeting" | "visit" | "status_change" | "created";
-type TimelineEventType = ContactEventType | "email_summary";
+type TimelineEventType = ContactEventType | "email_summary" | "sms_summary" | "whatsapp_summary" | "call_summary";
 
 type CrmContact = {
   id: string;
@@ -91,6 +91,23 @@ type EmailSummaryRow = {
   model_name: string | null;
   metadata: Record<string, unknown> | null;
   received_at: string;
+  created_at: string;
+};
+
+type TwilioSummaryRow = {
+  id: string;
+  workspace_id: string;
+  contact_id: string | null;
+  created_by: string | null;
+  summary_text: string;
+  channel: "sms" | "whatsapp" | "voice";
+  direction: "inbound" | "outbound";
+  triage_reason_code: string | null;
+  triage_confidence: number | null;
+  model_provider: string | null;
+  model_name: string | null;
+  metadata: Record<string, unknown> | null;
+  occurred_at: string;
   created_at: string;
 };
 
@@ -233,7 +250,10 @@ const TIMELINE_EVENT_FILTER_OPTIONS: Array<{ label: string; value: TimelineEvent
   { label: "Visit", value: "visit" },
   { label: "Status", value: "status_change" },
   { label: "Created", value: "created" },
-  { label: "AI emails", value: "email_summary" },
+  { label: "Emails", value: "email_summary" },
+  { label: "SMS", value: "sms_summary" },
+  { label: "WhatsApp", value: "whatsapp_summary" },
+  { label: "Calls", value: "call_summary" },
 ];
 
 function requiresBudget(clientType: ClientType) {
@@ -668,6 +688,9 @@ export default function CrmBoard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSwitchingWorkspace, setIsSwitchingWorkspace] = useState(false);
+  const [outboundChannel, setOutboundChannel] = useState<"sms" | "whatsapp" | null>(null);
+  const [outboundMessage, setOutboundMessage] = useState("");
+  const [isSendingOutbound, setIsSendingOutbound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -675,13 +698,13 @@ export default function CrmBoard() {
   const [isDeleteFinalCheckEnabled, setIsDeleteFinalCheckEnabled] = useState(false);
   const [contactSearchQuery, setContactSearchQuery] = useState("");
   const [onlyHighPriorityContacts, setOnlyHighPriorityContacts] = useState(false);
-  const [onlyEmailSummaries, setOnlyEmailSummaries] = useState(false);
   const [timelineSearchQuery, setTimelineSearchQuery] = useState("");
   const [timelineEventTypeFilter, setTimelineEventTypeFilter] = useState<TimelineEventTypeFilter>("all");
   const [timelineFromDate, setTimelineFromDate] = useState("");
   const [timelineToDate, setTimelineToDate] = useState("");
   const [timelineOnlyWithDueDate, setTimelineOnlyWithDueDate] = useState(false);
   const [isEmailFeatureEnabled, setIsEmailFeatureEnabled] = useState(false);
+  const [isTwilioFeatureEnabled, setIsTwilioFeatureEnabled] = useState(false);
   const [isEmailPolicyLoading, setIsEmailPolicyLoading] = useState(true);
   const canSwitchWorkspaceScope = currentRole === "super_admin" || currentRole === "owner";
   const canDeleteContacts = currentRole === "super_admin" || currentRole === "owner" || currentRole === "team_lead";
@@ -739,19 +762,19 @@ export default function CrmBoard() {
 
   const filteredEvents = useMemo(
     () => {
-      const visibleEvents = isEmailFeatureEnabled
-        ? events
-        : events.filter((event) => event.event_type !== "email_summary");
+      const TWILIO_EVENT_TYPES: TimelineEventType[] = ["sms_summary", "whatsapp_summary", "call_summary"];
 
-      const emailFiltered = onlyEmailSummaries
-        ? visibleEvents.filter((event) => event.event_type === "email_summary")
-        : visibleEvents;
+      const visibleEvents = events.filter((event) => {
+        if (event.event_type === "email_summary" && !isEmailFeatureEnabled) return false;
+        if ((TWILIO_EVENT_TYPES as string[]).includes(event.event_type) && !isTwilioFeatureEnabled) return false;
+        return true;
+      });
 
       const normalizedQuery = timelineSearchQuery.trim().toLowerCase();
       const fromIso = parseDisplayDateToIso(timelineFromDate);
       const toIso = parseDisplayDateToIso(timelineToDate);
 
-      return emailFiltered.filter((event) => {
+      return visibleEvents.filter((event) => {
         if (timelineEventTypeFilter !== "all" && event.event_type !== timelineEventTypeFilter) {
           return false;
         }
@@ -791,8 +814,8 @@ export default function CrmBoard() {
     },
     [
       events,
-      onlyEmailSummaries,
       isEmailFeatureEnabled,
+      isTwilioFeatureEnabled,
       timelineSearchQuery,
       timelineEventTypeFilter,
       timelineFromDate,
@@ -804,6 +827,21 @@ export default function CrmBoard() {
   const keptSummaryCount = useMemo(
     () => (isEmailFeatureEnabled ? events.filter((event) => event.event_type === "email_summary").length : 0),
     [events, isEmailFeatureEnabled],
+  );
+
+  const keptSmsSummaryCount = useMemo(
+    () => (isTwilioFeatureEnabled ? events.filter((event) => event.event_type === "sms_summary").length : 0),
+    [events, isTwilioFeatureEnabled],
+  );
+
+  const keptWhatsAppSummaryCount = useMemo(
+    () => (isTwilioFeatureEnabled ? events.filter((event) => event.event_type === "whatsapp_summary").length : 0),
+    [events, isTwilioFeatureEnabled],
+  );
+
+  const keptCallSummaryCount = useMemo(
+    () => (isTwilioFeatureEnabled ? events.filter((event) => event.event_type === "call_summary").length : 0),
+    [events, isTwilioFeatureEnabled],
   );
 
   function getAssigneePreview(contactId: string) {
@@ -886,7 +924,7 @@ export default function CrmBoard() {
   }, [contacts, isContactDetailsOpen, router, searchParams, selectedContactId]);
 
   useEffect(() => {
-    async function loadEmailPolicy(companyId: string) {
+    async function loadEmailPolicy(companyId: string, workspaceId: string) {
       const supabase = getSupabaseBrowserClient();
 
       if (!supabase) {
@@ -897,38 +935,42 @@ export default function CrmBoard() {
 
       setIsEmailPolicyLoading(true);
 
-      const { data, error: policyError } = await supabase
-        .from("email_ingestion_policies")
-        .select("feature_enabled")
-        .eq("company_id", companyId)
-        .maybeSingle();
+      const [policyResult, twilioResult] = await Promise.all([
+        supabase
+          .from("email_ingestion_policies")
+          .select("feature_enabled")
+          .eq("company_id", companyId)
+          .maybeSingle(),
+        supabase.rpc("get_effective_workspace_twilio_enabled", { p_workspace_id: workspaceId }),
+      ]);
 
-      if (policyError) {
-        setIsEmailFeatureEnabled(false);
-        setIsEmailPolicyLoading(false);
-        return;
-      }
-
-      setIsEmailFeatureEnabled(Boolean((data as { feature_enabled?: boolean } | null)?.feature_enabled));
+      const policyRow = policyResult.data as { feature_enabled?: boolean } | null;
+      setIsEmailFeatureEnabled(Boolean(policyRow?.feature_enabled));
+      setIsTwilioFeatureEnabled(Boolean(twilioResult.data));
       setIsEmailPolicyLoading(false);
     }
 
     const companyId = workspace?.company_id ?? null;
+    const workspaceId = workspace?.id ?? null;
 
-    if (!companyId) {
+    if (!companyId || !workspaceId) {
       setIsEmailFeatureEnabled(false);
       setIsEmailPolicyLoading(false);
       return;
     }
 
-    void loadEmailPolicy(companyId);
-  }, [workspace?.company_id]);
+    void loadEmailPolicy(companyId, workspaceId);
+  }, [workspace?.company_id, workspace?.id]);
 
   useEffect(() => {
-    if (!isEmailFeatureEnabled) {
-      setOnlyEmailSummaries(false);
+    if (!workspace?.id || !selectedContactId) {
+      return;
     }
-  }, [isEmailFeatureEnabled]);
+
+    void loadTimeline(workspace.id, selectedContactId);
+    // Re-run when Twilio feature toggles so Twilio summaries appear/disappear immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTwilioFeatureEnabled]);
 
   useEffect(() => {
     if (!workspace?.id || !selectedContactId) {
@@ -1137,7 +1179,7 @@ export default function CrmBoard() {
         contact_id: summary.contact_id ?? contactId,
         workspace_id: summary.workspace_id,
         created_by: summary.created_by,
-        event_type: "email_summary",
+        event_type: "email_summary" as TimelineEventType,
         title: "Email summary",
         body: summary.summary_text,
         metadata: {
@@ -1154,9 +1196,62 @@ export default function CrmBoard() {
       }));
     }
 
+    let twilioSummaryEvents: CrmContactEvent[] = [];
+
+    if (isTwilioFeatureEnabled) {
+      const { data: twilioRows, error: twilioError } = await supabase
+        .from("twilio_summaries")
+        .select("id, workspace_id, contact_id, created_by, summary_text, channel, direction, triage_reason_code, triage_confidence, model_provider, model_name, metadata, occurred_at, created_at")
+        .eq("workspace_id", workspaceId)
+        .eq("contact_id", contactId)
+        .order("occurred_at", { ascending: false })
+        .limit(100);
+
+      if (twilioError) {
+        setError(withSessionReloadFallback(twilioError.message, "Could not load Twilio summaries."));
+        return;
+      }
+
+      twilioSummaryEvents = ((twilioRows ?? []) as TwilioSummaryRow[]).map((summary) => {
+        const eventType: TimelineEventType =
+          summary.channel === "whatsapp" ? "whatsapp_summary"
+          : summary.channel === "voice" ? "call_summary"
+          : "sms_summary";
+
+        const channelLabel =
+          summary.channel === "whatsapp" ? "WhatsApp summary"
+          : summary.channel === "voice" ? "Call summary"
+          : "SMS summary";
+
+        return {
+          id: `twilio-summary-${summary.id}`,
+          contact_id: summary.contact_id ?? contactId,
+          workspace_id: summary.workspace_id,
+          created_by: summary.created_by,
+          event_type: eventType,
+          title: channelLabel,
+          body: summary.summary_text,
+          metadata: {
+            ...(summary.metadata ?? {}),
+            triage_label: "save_summary",
+            triage_reason_code: summary.triage_reason_code,
+            triage_confidence: summary.triage_confidence,
+            model_provider: summary.model_provider,
+            model_name: summary.model_name,
+            channel: summary.channel,
+            direction: summary.direction,
+            source: "twilio_summaries",
+          },
+          occurred_at: summary.occurred_at,
+          created_at: summary.created_at,
+        };
+      });
+    }
+
     const mergedEvents = [
       ...((data ?? []) as CrmContactEvent[]),
       ...summaryEvents,
+      ...twilioSummaryEvents,
     ].sort((left, right) => new Date(right.occurred_at).getTime() - new Date(left.occurred_at).getTime());
 
     setEvents(mergedEvents);
@@ -1989,7 +2084,7 @@ export default function CrmBoard() {
   }
 
   function canDeleteTimelineEvent(eventType: TimelineEventType) {
-    if (eventType === "email_summary") {
+    if (eventType === "email_summary" || eventType === "sms_summary" || eventType === "whatsapp_summary" || eventType === "call_summary") {
       return false;
     }
 
@@ -2096,6 +2191,74 @@ export default function CrmBoard() {
 
     setMessage("Timeline event deleted.");
     setIsSaving(false);
+  }
+
+  async function handleSendMessage() {
+    if (!workspace?.id || !selectedContactId || !selectedContact?.phone || !outboundChannel || !outboundMessage.trim()) {
+      return;
+    }
+
+    setIsSendingOutbound(true);
+    setError(null);
+
+    const response = await fetch("/api/twilio/send-message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: workspace.id,
+        contactId: selectedContactId,
+        to: selectedContact.phone,
+        message: outboundMessage.trim(),
+        channel: outboundChannel,
+      }),
+    });
+
+    setIsSendingOutbound(false);
+
+    if (!response.ok) {
+      const payload = (await response.json()) as { error?: string };
+      setError(payload.error ?? "Could not send message.");
+      return;
+    }
+
+    setOutboundChannel(null);
+    setOutboundMessage("");
+    setMessage(`${outboundChannel === "whatsapp" ? "WhatsApp" : "SMS"} sent.`);
+    void loadTimeline(workspace.id, selectedContactId);
+  }
+
+  async function handleInitiateCall() {
+    if (!workspace?.id || !selectedContactId || !selectedContact?.phone) {
+      return;
+    }
+
+    if (!window.confirm(`Call ${getContactName(selectedContact)} at ${selectedContact.phone}?`)) {
+      return;
+    }
+
+    setIsSendingOutbound(true);
+    setError(null);
+
+    const response = await fetch("/api/twilio/initiate-call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: workspace.id,
+        contactId: selectedContactId,
+        to: selectedContact.phone,
+      }),
+    });
+
+    setIsSendingOutbound(false);
+
+    if (!response.ok) {
+      const payload = (await response.json()) as { error?: string };
+      setError(payload.error ?? "Could not initiate call.");
+      return;
+    }
+
+    setMessage("Call initiated.");
+    void loadTimeline(workspace.id, selectedContactId);
   }
 
   if (workspaceError) {
@@ -2703,17 +2866,6 @@ export default function CrmBoard() {
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
                   Timeline for {getContactName(selectedContact)}
                 </p>
-                {isEmailFeatureEnabled ? (
-                  <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
-                    <input
-                      type="checkbox"
-                      checked={onlyEmailSummaries}
-                      onChange={(event) => setOnlyEmailSummaries(event.target.checked)}
-                      className="h-4 w-4"
-                    />
-                    Email summaries only
-                  </label>
-                ) : null}
               </div>
               <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-white p-3 sm:grid-cols-2 lg:grid-cols-4">
                 <input
@@ -3358,6 +3510,65 @@ export default function CrmBoard() {
               </div>
 
               <div className="space-y-4">
+                {isTwilioFeatureEnabled && selectedContact.phone ? (
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Send message / Call</p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setOutboundChannel(outboundChannel === "sms" ? null : "sms")}
+                        disabled={isSendingOutbound}
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${outboundChannel === "sms" ? "border-emerald-500 bg-emerald-500 text-white" : "border-[var(--border)] bg-white text-[var(--foreground)] hover:bg-slate-50"}`}
+                      >
+                        SMS
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOutboundChannel(outboundChannel === "whatsapp" ? null : "whatsapp")}
+                        disabled={isSendingOutbound}
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${outboundChannel === "whatsapp" ? "border-teal-500 bg-teal-500 text-white" : "border-[var(--border)] bg-white text-[var(--foreground)] hover:bg-slate-50"}`}
+                      >
+                        WhatsApp
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleInitiateCall()}
+                        disabled={isSendingOutbound}
+                        className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        {isSendingOutbound ? "Calling..." : "Call"}
+                      </button>
+                    </div>
+                    {outboundChannel ? (
+                      <div className="space-y-2">
+                        <textarea
+                          value={outboundMessage}
+                          onChange={(event) => setOutboundMessage(event.target.value)}
+                          rows={3}
+                          placeholder={`Type your ${outboundChannel === "whatsapp" ? "WhatsApp" : "SMS"} message...`}
+                          className="w-full rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isSendingOutbound || !outboundMessage.trim()}
+                            onClick={() => void handleSendMessage()}
+                            className="rounded-xl border border-blue-500 bg-blue-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-600 disabled:opacity-60"
+                          >
+                            {isSendingOutbound ? "Sending..." : "Send"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setOutboundChannel(null); setOutboundMessage(""); }}
+                            className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="space-y-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Log interaction</p>
                   <form onSubmit={handleCreateInteraction} className="grid gap-3">
@@ -3446,17 +3657,6 @@ export default function CrmBoard() {
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Timeline</p>
-                    {isEmailFeatureEnabled ? (
-                      <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
-                        <input
-                          type="checkbox"
-                          checked={onlyEmailSummaries}
-                          onChange={(event) => setOnlyEmailSummaries(event.target.checked)}
-                          className="h-4 w-4"
-                        />
-                        Email summaries only
-                      </label>
-                    ) : null}
                   </div>
                   <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-white p-3 sm:grid-cols-2">
                     <input
@@ -3504,11 +3704,28 @@ export default function CrmBoard() {
                       className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
                     />
                   </div>
-                  {isEmailFeatureEnabled ? (
+                  {(isEmailFeatureEnabled || isTwilioFeatureEnabled) ? (
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-blue-700">
-                        AI kept emails {keptSummaryCount}
-                      </span>
+                      {isEmailFeatureEnabled ? (
+                        <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-blue-700">
+                          Emails {keptSummaryCount}
+                        </span>
+                      ) : null}
+                      {isTwilioFeatureEnabled ? (
+                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                          SMS {keptSmsSummaryCount}
+                        </span>
+                      ) : null}
+                      {isTwilioFeatureEnabled ? (
+                        <span className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-teal-700">
+                          WhatsApp {keptWhatsAppSummaryCount}
+                        </span>
+                      ) : null}
+                      {isTwilioFeatureEnabled ? (
+                        <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-violet-700">
+                          Calls {keptCallSummaryCount}
+                        </span>
+                      ) : null}
                     </div>
                   ) : null}
                   <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
@@ -3587,14 +3804,21 @@ export default function CrmBoard() {
                                 {timelineEvent.event_type}
                               </span>
                             </div>
-                            {timelineEvent.event_type === "email_summary" ? (
+                            {(timelineEvent.event_type === "email_summary" || timelineEvent.event_type === "sms_summary" || timelineEvent.event_type === "whatsapp_summary" || timelineEvent.event_type === "call_summary") ? (
                               <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-blue-700">
-                                  AI kept
-                                </span>
+                                {timelineEvent.event_type === "sms_summary" ? (
+                                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-700">SMS</span>
+                                ) : timelineEvent.event_type === "whatsapp_summary" ? (
+                                  <span className="rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-teal-700">WhatsApp</span>
+                                ) : timelineEvent.event_type === "call_summary" ? (
+                                  <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-violet-700">Call</span>
+                                ) : (
+                                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-blue-700">Email</span>
+                                )}
+                                <span className="text-[10px] text-[var(--muted)]">AI can make mistakes</span>
                                 {typeof timelineEvent.metadata?.triage_confidence === "number" ? (
                                   <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">
-                                    confidence {(timelineEvent.metadata.triage_confidence as number * 100).toFixed(0)}%
+                                    confidence {((timelineEvent.metadata.triage_confidence as number) * 100).toFixed(0)}%
                                   </span>
                                 ) : null}
                               </div>

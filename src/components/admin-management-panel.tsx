@@ -333,7 +333,7 @@ export default function AdminManagementPanel() {
       <div className="admin-section space-y-4">
         <div className="admin-section-header">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Automation and policy</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">Company-wide controls for email triage and daily briefing governance.</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">Company-wide controls for email triage, SMS &amp; call intelligence, and daily briefing governance.</p>
         </div>
 
         <AdminEmailPolicyPanel />

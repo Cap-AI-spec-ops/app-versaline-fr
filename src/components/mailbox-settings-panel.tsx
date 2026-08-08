@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, ClipboardEvent, FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { withSessionReloadFallback } from "@/lib/auth/session-error-message";
 import { dispatchCreditsBalanceRefresh } from "@/lib/credits/client-refresh";
@@ -61,9 +61,10 @@ function formatDate(value: string | null) {
     return "Never";
   }
 
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: "Europe/Paris",
   }).format(new Date(value));
 }
 
@@ -173,11 +174,19 @@ export default function MailboxSettingsPanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [signatureHtml, setSignatureHtml] = useState("");
+  const [signatureFont, setSignatureFont] = useState("Arial");
+  const [signatureSize, setSignatureSize] = useState("3");
+  const [signatureColor, setSignatureColor] = useState("#1f2937");
+  const [selectedSignatureImageWidth, setSelectedSignatureImageWidth] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isEmailFeatureEnabled, setIsEmailFeatureEnabled] = useState(false);
   const [isPolicyLoading, setIsPolicyLoading] = useState(true);
   const [includeSentMailByPolicy, setIncludeSentMailByPolicy] = useState(false);
+  const signatureEditorRef = useRef<HTMLDivElement | null>(null);
+  const signatureFileInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedSignatureImageRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     async function loadEmailPolicy(companyId: string) {
@@ -232,6 +241,181 @@ export default function MailboxSettingsPanel() {
     void loadMailboxSettings(workspace.id);
   }, [workspace?.id, supabase, isEmailFeatureEnabled]);
 
+  useEffect(() => {
+    const editor = signatureEditorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    if (editor.innerHTML !== signatureHtml) {
+      editor.innerHTML = signatureHtml;
+    }
+
+    if (selectedSignatureImageRef.current && !editor.contains(selectedSignatureImageRef.current)) {
+      selectedSignatureImageRef.current = null;
+      setSelectedSignatureImageWidth(null);
+    }
+  }, [signatureHtml]);
+
+  function clearSelectedSignatureImage() {
+    if (selectedSignatureImageRef.current) {
+      selectedSignatureImageRef.current.style.outline = "";
+      selectedSignatureImageRef.current.style.outlineOffset = "";
+    }
+
+    selectedSignatureImageRef.current = null;
+    setSelectedSignatureImageWidth(null);
+  }
+
+  function getImageWidth(img: HTMLImageElement) {
+    const fromStyleWidth = Number.parseInt(img.style.width, 10);
+    if (Number.isFinite(fromStyleWidth) && fromStyleWidth > 0) {
+      return fromStyleWidth;
+    }
+
+    const fromStyleMaxWidth = Number.parseInt(img.style.maxWidth, 10);
+    if (Number.isFinite(fromStyleMaxWidth) && fromStyleMaxWidth > 0) {
+      return fromStyleMaxWidth;
+    }
+
+    const fromClient = img.clientWidth;
+    if (fromClient > 0) {
+      return fromClient;
+    }
+
+    return 260;
+  }
+
+  function selectSignatureImage(img: HTMLImageElement) {
+    if (selectedSignatureImageRef.current && selectedSignatureImageRef.current !== img) {
+      selectedSignatureImageRef.current.style.outline = "";
+      selectedSignatureImageRef.current.style.outlineOffset = "";
+    }
+
+    selectedSignatureImageRef.current = img;
+    img.style.outline = "2px solid #38bdf8";
+    img.style.outlineOffset = "2px";
+    setSelectedSignatureImageWidth(getImageWidth(img));
+  }
+
+  function applySignatureImageWidth(width: number) {
+    const img = selectedSignatureImageRef.current;
+    if (!img) {
+      return;
+    }
+
+    const safeWidth = Math.max(60, Math.min(600, Math.round(width)));
+    img.style.width = `${safeWidth}px`;
+    img.style.maxWidth = `${safeWidth}px`;
+    img.style.height = "auto";
+    setSelectedSignatureImageWidth(safeWidth);
+    syncSignatureFromEditor();
+  }
+
+  function syncSignatureFromEditor() {
+    const editor = signatureEditorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    setSignatureHtml(editor.innerHTML);
+  }
+
+  function applySignatureCommand(command: string, value?: string) {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const editor = signatureEditorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    editor.focus();
+    document.execCommand(command, false, value);
+    syncSignatureFromEditor();
+  }
+
+  function insertSignatureImageDataUrl(dataUrl: string) {
+    applySignatureCommand(
+      "insertHTML",
+      `<img src="${dataUrl}" alt="Signature image" style="max-width: 260px; height: auto; border-radius: 8px; display: inline-block;" />`,
+    );
+
+    const editor = signatureEditorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    const images = Array.from(editor.querySelectorAll("img"));
+    const newestImage = images[images.length - 1];
+
+    if (newestImage instanceof HTMLImageElement) {
+      selectSignatureImage(newestImage);
+    }
+  }
+
+  function insertSignatureImageFile(file: File) {
+    if (!file.type.startsWith("image/")) {
+      setError("Please choose an image file for your signature.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : null;
+      if (!result) {
+        setError("Could not read the selected image.");
+        return;
+      }
+
+      setError(null);
+      insertSignatureImageDataUrl(result);
+    };
+
+    reader.onerror = () => {
+      setError("Could not read the selected image.");
+    };
+
+    reader.readAsDataURL(file);
+  }
+
+  function handleSignatureImageUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) {
+      return;
+    }
+
+    insertSignatureImageFile(file);
+    event.target.value = "";
+  }
+
+  function handleSignaturePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+
+    const imageFile = files.find((file) => file.type.startsWith("image/"));
+    if (!imageFile) {
+      return;
+    }
+
+    event.preventDefault();
+    insertSignatureImageFile(imageFile);
+  }
+
+  function handleSignatureEditorClick(event: MouseEvent<HTMLDivElement>) {
+    const target = event.target;
+
+    if (target instanceof HTMLImageElement) {
+      selectSignatureImage(target);
+      return;
+    }
+
+    clearSelectedSignatureImage();
+  }
+
   async function loadMailboxSettings(workspaceId: string) {
     if (!supabase) {
       setError("Supabase is not configured.");
@@ -263,6 +447,13 @@ export default function MailboxSettingsPanel() {
       typeof emailPrefs.summary_language === "string" && emailPrefs.summary_language.trim()
         ? emailPrefs.summary_language.trim().toLowerCase()
         : null;
+
+    const { data: profileRow } = await supabase
+      .from("profiles")
+      .select("signature_html")
+      .eq("id", user.id)
+      .maybeSingle<{ signature_html: string | null }>();
+    const metadataSignatureHtml = profileRow?.signature_html ?? "";
 
     const { data, error: rowsError } = await supabase
       .from("mailbox_connections")
@@ -349,6 +540,7 @@ export default function MailboxSettingsPanel() {
       includeSentMail: metadataIncludeSentMail ?? rowIncludeSentMail ?? includeSentMailByPolicy,
       summaryLanguage: metadataSummaryLanguage ?? rowSummaryLanguage ?? "en",
     });
+    setSignatureHtml(metadataSignatureHtml);
 
     setIsLoading(false);
   }
@@ -448,6 +640,24 @@ export default function MailboxSettingsPanel() {
     if (metadataError) {
       setIsSaving(false);
       setError(withSessionReloadFallback(metadataError.message, "Could not save mailbox preferences."));
+      return;
+    }
+
+    const builtSignature = buildStyledHtml(signatureHtml.trim(), signatureColor);
+    const MAX_SIGNATURE_BYTES = 1 * 1024 * 1024; // 1 MB — hard limit before DB write
+    if (new Blob([builtSignature]).size > MAX_SIGNATURE_BYTES) {
+      setIsSaving(false);
+      setError("Signature exceeds the 1 MB limit. Reduce image size or remove some images.");
+      return;
+    }
+
+    const { error: signatureError } = await supabase.rpc("update_current_profile_signature", {
+      p_signature_html: builtSignature,
+    });
+
+    if (signatureError) {
+      setIsSaving(false);
+      setError(withSessionReloadFallback(signatureError.message, "Could not save signature."));
       return;
     }
 
@@ -612,6 +822,14 @@ export default function MailboxSettingsPanel() {
         <p className="mt-4 text-base leading-7 text-[var(--muted)]">
           Connect your mailbox providers so Versaline can triage and summarize client emails into CRM timelines.
         </p>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Link
+            href="/settings/daily-briefing"
+            className="rounded-xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+          >
+            Open daily briefing settings
+          </Link>
+        </div>
       </div>
 
       <div className="space-y-4">
@@ -708,7 +926,7 @@ export default function MailboxSettingsPanel() {
         className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-sm"
       >
         <p className="text-sm font-semibold text-[var(--foreground)]">Personal preferences</p>
-        <p className="mt-1 text-sm text-[var(--muted)]">Summary language applies to your own mailbox summaries.</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">Summary language applies to CRM recap entries shown in timeline.</p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <label className="flex flex-col gap-1 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)]">
@@ -755,6 +973,164 @@ export default function MailboxSettingsPanel() {
           </label>
         </div>
 
+        <div className="mt-4 space-y-2 text-sm text-[var(--foreground)]">
+          <span className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">Email signature</span>
+
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2">
+            <select
+              value={signatureFont}
+              onChange={(event) => {
+                const nextFont = event.target.value;
+                setSignatureFont(nextFont);
+                applySignatureCommand("fontName", nextFont);
+              }}
+              className="rounded-lg border border-[var(--border)] bg-white px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
+            >
+              <option value="Arial">Arial</option>
+              <option value="Georgia">Georgia</option>
+              <option value="Tahoma">Tahoma</option>
+              <option value="Times New Roman">Times New Roman</option>
+              <option value="Verdana">Verdana</option>
+            </select>
+
+            <select
+              value={signatureSize}
+              onChange={(event) => {
+                const nextSize = event.target.value;
+                setSignatureSize(nextSize);
+                applySignatureCommand("fontSize", nextSize);
+              }}
+              className="rounded-lg border border-[var(--border)] bg-white px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--accent)]"
+            >
+              <option value="1">8</option>
+              <option value="2">10</option>
+              <option value="3">12</option>
+              <option value="4">14</option>
+              <option value="5">18</option>
+              <option value="6">24</option>
+            </select>
+
+            <label className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--foreground)]">
+              Color
+              <input
+                type="color"
+                value={signatureColor}
+                onChange={(event) => {
+                  const nextColor = event.target.value;
+                  setSignatureColor(nextColor);
+                  signatureEditorRef.current?.focus();
+                }}
+                className="h-5 w-6 cursor-pointer border-0 bg-transparent p-0"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={() => applySignatureCommand("bold")}
+              className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+            >
+              Bold
+            </button>
+            <button
+              type="button"
+              onClick={() => applySignatureCommand("italic")}
+              className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+            >
+              Italic
+            </button>
+            <button
+              type="button"
+              onClick={() => applySignatureCommand("underline")}
+              className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+            >
+              Underline
+            </button>
+
+            <button
+              type="button"
+              onClick={() => signatureFileInputRef.current?.click()}
+              className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+            >
+              Add image
+            </button>
+            <input
+              ref={signatureFileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleSignatureImageUpload}
+              className="hidden"
+            />
+          </div>
+
+          <div
+            ref={signatureEditorRef}
+            contentEditable
+            suppressContentEditableWarning
+            onInput={syncSignatureFromEditor}
+            onPaste={handleSignaturePaste}
+            onClick={handleSignatureEditorClick}
+            className="min-h-[160px] rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            style={{
+              whiteSpace: "pre-wrap",
+              color: signatureColor,
+            }}
+            data-placeholder="Type your signature here. You can paste an image directly (Ctrl+V)."
+          />
+
+          <p className="text-xs text-[var(--muted)]">
+            This signature is applied by default when composing a new message, and can be unchecked per message.
+          </p>
+          {selectedSignatureImageWidth !== null ? (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.1em] text-sky-700">Selected image size</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  type="range"
+                  min={60}
+                  max={600}
+                  step={5}
+                  value={selectedSignatureImageWidth}
+                  onChange={(event) => applySignatureImageWidth(Number(event.target.value))}
+                  className="w-full max-w-xs"
+                />
+                <input
+                  type="number"
+                  min={60}
+                  max={600}
+                  value={selectedSignatureImageWidth}
+                  onChange={(event) => applySignatureImageWidth(Number(event.target.value))}
+                  className="w-20 rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-[var(--foreground)]"
+                />
+                <span className="text-xs text-sky-700">px</span>
+                <button
+                  type="button"
+                  onClick={() => applySignatureImageWidth(120)}
+                  className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                >
+                  Small
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applySignatureImageWidth(220)}
+                  className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                >
+                  Medium
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applySignatureImageWidth(320)}
+                  className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                >
+                  Large
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <p className="text-xs text-[var(--muted)]">
+            Tip: paste a logo/image directly into the editor, or use Add image. Click an image to resize it.
+          </p>
+        </div>
+
         {error ? <p className="mt-3 text-sm font-medium text-red-600">{error}</p> : null}
         {message ? <p className="mt-3 text-sm font-medium text-emerald-700">{message}</p> : null}
 
@@ -776,4 +1152,12 @@ export default function MailboxSettingsPanel() {
       </form>
     </section>
   );
+}
+
+function buildStyledHtml(html: string, color: string) {
+  return `<div style="color: ${sanitizeCssValue(color)};">${html}</div>`;
+}
+
+function sanitizeCssValue(value: string) {
+  return value.replace(/[<>"']/g, "");
 }

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import AdminSmsCallsSetupPanel from "@/components/admin-sms-calls-setup-panel";
 import { withSessionReloadFallback } from "@/lib/auth/session-error-message";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useCurrentWorkspace } from "@/lib/workspace/use-current-workspace";
@@ -16,6 +17,8 @@ type EmailPolicyRow = {
   confidence_threshold: number;
   daily_briefing_enabled: boolean;
   daily_briefing_control: "owner_locked" | "team_lead_select";
+  twilio_enabled: boolean;
+  twilio_control: "owner_locked" | "team_lead_select";
 };
 
 const DEFAULT_POLICY: EmailPolicyRow = {
@@ -26,6 +29,8 @@ const DEFAULT_POLICY: EmailPolicyRow = {
   confidence_threshold: 70,
   daily_briefing_enabled: true,
   daily_briefing_control: "owner_locked",
+  twilio_enabled: false,
+  twilio_control: "owner_locked",
 };
 
 function buildGdprAddendum(params: { companyName: string; workspaceName: string }) {
@@ -88,7 +93,7 @@ export default function AdminEmailPolicyPanel() {
 
     const { data, error: fetchError } = await supabase
       .from("email_ingestion_policies")
-      .select("company_id, feature_enabled, include_sent_mail_in_summaries, summary_retention_days, confidence_threshold, daily_briefing_enabled, daily_briefing_control")
+      .select("company_id, feature_enabled, include_sent_mail_in_summaries, summary_retention_days, confidence_threshold, daily_briefing_enabled, daily_briefing_control, twilio_enabled, twilio_control")
       .eq("company_id", targetCompanyId)
       .maybeSingle();
 
@@ -119,6 +124,9 @@ export default function AdminEmailPolicyPanel() {
       daily_briefing_enabled: loaded.daily_briefing_enabled ?? DEFAULT_POLICY.daily_briefing_enabled,
       daily_briefing_control:
         loaded.daily_briefing_control === "team_lead_select" ? "team_lead_select" : "owner_locked",
+      twilio_enabled: loaded.twilio_enabled ?? DEFAULT_POLICY.twilio_enabled,
+      twilio_control:
+        loaded.twilio_control === "team_lead_select" ? "team_lead_select" : "owner_locked",
     });
     setIsLoading(false);
   }
@@ -143,6 +151,8 @@ export default function AdminEmailPolicyPanel() {
       confidence_threshold: Math.max(0, Math.min(100, Math.round(policy.confidence_threshold))),
       daily_briefing_enabled: policy.daily_briefing_enabled,
       daily_briefing_control: policy.daily_briefing_control,
+      twilio_enabled: policy.twilio_enabled,
+      twilio_control: policy.twilio_control,
     };
 
     const { error: upsertError } = await supabase
@@ -209,7 +219,7 @@ export default function AdminEmailPolicyPanel() {
     <div className="settings-card admin-card admin-policy-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-[var(--foreground)]">Company email triage policy</p>
+          <p className="text-sm font-semibold text-[var(--foreground)]">Communication intelligence policy</p>
           <p className="mt-1 text-sm text-[var(--muted)]">
             This feature classifies inbound emails with AI, keeps only useful summaries, and links them to CRM contacts.
           </p>
@@ -230,71 +240,80 @@ export default function AdminEmailPolicyPanel() {
       {!isPolicyCardOpen ? <p className="mt-3 text-sm text-[var(--muted)]">This section is collapsed.</p> : null}
 
       {isPolicyCardOpen ? (
+      <>
       <form onSubmit={(event) => void handleSave(event)} className="mt-4">
         <div className="grid gap-4 md:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)]">
-            <input
-              type="checkbox"
-              checked={policy.feature_enabled}
-              onChange={(event) => setPolicy((previous) => ({ ...previous, feature_enabled: event.target.checked }))}
-              className="h-4 w-4"
-            />
-            Enable email triage and summary feature
-          </label>
+          <div className="rounded-xl border border-[var(--border)] bg-white px-3 py-3 md:col-span-2">
+            <p className="text-sm font-semibold text-[var(--foreground)]">Email triage</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Classifies inbound emails with AI, keeps only useful summaries, and links them to CRM contacts.
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm text-[var(--foreground)]">
+                <input
+                  type="checkbox"
+                  checked={policy.feature_enabled}
+                  onChange={(event) => setPolicy((previous) => ({ ...previous, feature_enabled: event.target.checked }))}
+                  className="h-4 w-4"
+                />
+                Enable AI email triage
+              </label>
 
-          <label className="flex flex-col gap-1 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--foreground)]">
-            <span className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={policy.include_sent_mail_in_summaries}
-                onChange={(event) =>
-                  setPolicy((previous) => ({
-                    ...previous,
-                    include_sent_mail_in_summaries: event.target.checked,
-                  }))
-                }
-                className="h-4 w-4"
-              />
-              Include sent mail in summaries
-            </span>
-            <span className="text-xs text-[var(--muted)]">
-              Improves summary quality with more context, with an additional 0.1 credit per summary action.
-            </span>
-          </label>
+              <label className="flex flex-col gap-1 text-sm text-[var(--foreground)]">
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={policy.include_sent_mail_in_summaries}
+                    onChange={(event) =>
+                      setPolicy((previous) => ({
+                        ...previous,
+                        include_sent_mail_in_summaries: event.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4"
+                  />
+                  Include sent mail in summaries
+                </span>
+                <span className="text-xs text-[var(--muted)]">
+                  Improves summary quality with more context, with an additional 0.1 credit per summary action.
+                </span>
+              </label>
 
-          <label className="flex flex-col gap-1 text-sm text-[var(--foreground)]">
-            <span className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">Summary retention (days)</span>
-            <input
-              type="number"
-              min={30}
-              max={365}
-              value={policy.summary_retention_days}
-              onChange={(event) =>
-                setPolicy((previous) => ({
-                  ...previous,
-                  summary_retention_days: Number(event.target.value || 180),
-                }))
-              }
-              className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
-            />
-          </label>
+              <label className="flex flex-col gap-1 text-sm text-[var(--foreground)]">
+                <span className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">Summary retention (days)</span>
+                <input
+                  type="number"
+                  min={30}
+                  max={365}
+                  value={policy.summary_retention_days}
+                  onChange={(event) =>
+                    setPolicy((previous) => ({
+                      ...previous,
+                      summary_retention_days: Number(event.target.value || 180),
+                    }))
+                  }
+                  className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                />
+              </label>
 
-          <label className="flex flex-col gap-1 text-sm text-[var(--foreground)]">
-            <span className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">AI confidence threshold</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={policy.confidence_threshold}
-              onChange={(event) =>
-                setPolicy((previous) => ({
-                  ...previous,
-                  confidence_threshold: Number(event.target.value || 70),
-                }))
-              }
-            />
-            <span className="text-xs text-[var(--muted)]">{policy.confidence_threshold}%</span>
-          </label>
+              <label className="flex flex-col gap-1 text-sm text-[var(--foreground)]">
+                <span className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">AI confidence threshold</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={policy.confidence_threshold}
+                  onChange={(event) =>
+                    setPolicy((previous) => ({
+                      ...previous,
+                      confidence_threshold: Number(event.target.value || 70),
+                    }))
+                  }
+                />
+                <span className="text-xs text-[var(--muted)]">{policy.confidence_threshold}%</span>
+              </label>
+            </div>
+          </div>
 
           <div className="rounded-xl border border-[var(--border)] bg-white px-3 py-3 md:col-span-2">
             <p className="text-sm font-semibold text-[var(--foreground)]">Daily briefing governance</p>
@@ -352,6 +371,62 @@ export default function AdminEmailPolicyPanel() {
             </fieldset>
           </div>
 
+          <div className="rounded-xl border border-[var(--border)] bg-white px-3 py-3 md:col-span-2">
+            <p className="text-sm font-semibold text-[var(--foreground)]">SMS &amp; calls intelligent triage</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Enables AI-assisted triage and summaries for inbound and outbound SMS, WhatsApp, and voice calls in the CRM. Enabling this incurs additional costs.
+            </p>
+
+            <label className="mt-3 flex items-center gap-2 text-sm text-[var(--foreground)]">
+              <input
+                type="checkbox"
+                checked={policy.twilio_enabled}
+                onChange={(event) =>
+                  setPolicy((previous) => ({
+                    ...previous,
+                    twilio_enabled: event.target.checked,
+                  }))
+                }
+                className="h-4 w-4"
+              />
+              Enable SMS, WhatsApp &amp; call intelligence for this company
+            </label>
+
+            <fieldset className="mt-3 grid gap-2 text-sm text-[var(--foreground)]">
+              <legend className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">Decision mode</legend>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="twilio-control"
+                  checked={policy.twilio_control === "owner_locked"}
+                  onChange={() =>
+                    setPolicy((previous) => ({
+                      ...previous,
+                      twilio_control: "owner_locked",
+                    }))
+                  }
+                  className="h-4 w-4"
+                />
+                Admin locked (owners decide company availability)
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="twilio-control"
+                  checked={policy.twilio_control === "team_lead_select"}
+                  onChange={() =>
+                    setPolicy((previous) => ({
+                      ...previous,
+                      twilio_control: "team_lead_select",
+                    }))
+                  }
+                  className="h-4 w-4"
+                />
+                Delegate to team leads (each workspace lead can enable or disable for their workspace)
+              </label>
+            </fieldset>
+          </div>
+
         </div>
 
         {error ? <p className="mt-3 text-sm font-medium text-red-600">{error}</p> : null}
@@ -374,6 +449,19 @@ export default function AdminEmailPolicyPanel() {
           </button>
         </div>
       </form>
+      {policy.twilio_enabled ? (
+        <div className="mt-5 border-t border-[var(--border)] pt-5">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+            Provisioning setup
+          </p>
+          <AdminSmsCallsSetupPanel />
+        </div>
+      ) : (
+        <p className="mt-5 text-xs text-[var(--muted)]">
+          Enable SMS, WhatsApp and call intelligence above to reveal managed number provisioning and WhatsApp activation.
+        </p>
+      )}
+      </>
       ) : null}
 
       {isAddendumInfoOpen ? (
