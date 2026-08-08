@@ -47,6 +47,20 @@ type InboxThreadResponse = {
   thread?: InboxThreadMessage[];
 };
 
+async function readJsonSafe<T>(response: Response): Promise<T> {
+  const raw = await response.text();
+
+  if (!raw.trim()) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error(`Unexpected response format (${response.status}).`);
+  }
+}
+
 export default function InboxPanel() {
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [members, setMembers] = useState<InboxMember[]>([]);
@@ -116,7 +130,7 @@ export default function InboxPanel() {
       const response = await fetch("/api/inbox", {
         cache: "no-store",
       });
-      const payload = (await response.json()) as InboxListResponse;
+      const payload = await readJsonSafe<InboxListResponse>(response);
 
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error ?? "Could not load inbox.");
@@ -158,7 +172,7 @@ export default function InboxPanel() {
       const response = await fetch(`/api/inbox?${search.toString()}`, {
         cache: "no-store",
       });
-      const payload = (await response.json()) as InboxThreadResponse;
+      const payload = await readJsonSafe<InboxThreadResponse>(response);
 
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error ?? "Could not load thread.");
@@ -187,10 +201,10 @@ export default function InboxPanel() {
         body: JSON.stringify(body),
       });
 
-      const payload = (await response.json()) as { ok?: boolean; error?: string };
+      const payload = await readJsonSafe<{ ok?: boolean; error?: string }>(response);
 
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error ?? "Action failed.");
+        throw new Error(payload.error ?? `Action failed (${response.status}).`);
       }
 
       setMessage("Action completed.");
