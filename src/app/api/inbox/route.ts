@@ -15,8 +15,11 @@ type MailboxConnectionRow = {
   profile_id: string;
   provider: MailProvider;
   status: "connected" | "disconnected" | "pending" | "error";
+  include_sent_mail: boolean;
+  last_synced_at: string | null;
   oauth_access_token: string | null;
   oauth_refresh_token: string | null;
+  oauth_token_updated_at: string | null;
 };
 
 type InboxAssignmentRow = {
@@ -341,7 +344,9 @@ async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContext
 
   const connectionsResult = await supabase
     .from("mailbox_connections")
-    .select("id, workspace_id, profile_id, provider, status, oauth_access_token, oauth_refresh_token")
+    .select(
+      "id, workspace_id, profile_id, provider, status, include_sent_mail, last_synced_at, oauth_access_token, oauth_refresh_token, oauth_token_updated_at",
+    )
     .eq("workspace_id", workspaceId)
     .eq("profile_id", profileId)
     .eq("status", "connected")
