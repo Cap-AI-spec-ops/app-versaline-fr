@@ -122,7 +122,10 @@ export async function POST(request: NextRequest) {
   );
 }
 
-async function resolveTwilioCallPolicy(supabase: ReturnType<typeof createClient>, workspaceId: string) {
+async function resolveTwilioCallPolicy(
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdminClient>>,
+  workspaceId: string,
+) {
   const { data: workspace } = await supabase
     .from("workspaces")
     .select("company_id")

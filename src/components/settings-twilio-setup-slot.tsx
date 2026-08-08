@@ -19,16 +19,19 @@ export default function SettingsTwilioSetupSlot() {
 
     let isMounted = true;
 
-    void supabase
-      .rpc("get_effective_workspace_twilio_enabled", { p_workspace_id: workspace.id })
-      .then((result) => {
+    void (async () => {
+      try {
+        const result = await supabase.rpc("get_effective_workspace_twilio_enabled", {
+          p_workspace_id: workspace.id,
+        });
+
         if (!isMounted) return;
         setIsEnabled(Boolean(result.data));
-      })
-      .catch(() => {
+      } catch {
         if (!isMounted) return;
         setIsEnabled(false);
-      });
+      }
+    })();
 
     return () => {
       isMounted = false;

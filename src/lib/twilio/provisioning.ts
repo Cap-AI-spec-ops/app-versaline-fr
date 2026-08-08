@@ -301,8 +301,13 @@ async function findAddressRequiredCandidate(options: {
     const candidate = pickCandidate(payload.available_phone_numbers ?? [], options.requireSms, options.requireVoice);
 
     if (candidate) {
+      const phoneNumber = candidate.phone_number?.trim();
+      if (!phoneNumber) {
+        continue;
+      }
+
       return {
-        phone_number: candidate.phone_number,
+        phone_number: phoneNumber,
         friendly_name: candidate.friendly_name ?? null,
         capabilities: candidate.capabilities
           ? {

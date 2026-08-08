@@ -238,7 +238,7 @@ export async function POST(request: NextRequest) {
 }
 
 async function syncWhatsAppSenderState(options: {
-  adminClient: ReturnType<typeof createClient>;
+  adminClient: NonNullable<ReturnType<typeof getSupabaseAdminClient>>;
   workspaceId: string;
   twilioAccountId: string;
   twilioNumberId: string;

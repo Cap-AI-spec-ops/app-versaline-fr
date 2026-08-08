@@ -32,7 +32,6 @@ export async function POST(request: NextRequest) {
   }
 
   const digits = (params.Digits ?? "").trim();
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ?? "";
   const statusCallbackUrl = `${siteUrl}/api/twilio/voice-status`;
   const transcriptCallbackUrl = `${siteUrl}/api/twilio/voice-transcript`;
   // forwarding_number passed as query param from /api/twilio/voice

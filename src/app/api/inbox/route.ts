@@ -625,9 +625,9 @@ async function listGmailMessages(accessToken: string, mailbox: MailboxView): Pro
           : new Date().toISOString();
     const labelSet = new Set(payload.labelIds ?? []);
 
-    return {
+    const message: InboxMessage = {
       key: `gmail:${payload.id ?? item.messageId}`,
-      provider: "gmail" as const,
+      provider: "gmail",
       messageId: payload.id ?? item.messageId,
       threadId: payload.threadId ?? item.threadId ?? null,
       subject,
@@ -638,9 +638,11 @@ async function listGmailMessages(accessToken: string, mailbox: MailboxView): Pro
       isArchived: !labelSet.has("INBOX"),
       assignedToProfileId: null,
     };
+
+    return message;
   });
 
-  return hydrated.filter((entry): entry is InboxMessage => entry !== null);
+  return hydrated.filter(isNonNull);
 }
 
 async function listOutlookMessages(accessToken: string, mailbox: MailboxView): Promise<InboxMessage[]> {
@@ -806,7 +808,7 @@ async function listGmailDraftMessages(accessToken: string): Promise<InboxMessage
     const draftMessage = payload.message;
     const messageId = draftMessage?.id?.trim();
 
-    if (!messageId) {
+    if (!draftMessage || !messageId) {
       return null;
     }
 
@@ -837,7 +839,11 @@ async function listGmailDraftMessages(accessToken: string): Promise<InboxMessage
     };
   });
 
-  return hydrated.filter((entry): entry is InboxMessage => entry !== null);
+  return hydrated.filter(isNonNull);
+}
+
+function isNonNull<T>(value: T | null): value is T {
+  return value !== null;
 }
 
 function buildGmailMailboxQuery(mailbox: MailboxView) {
