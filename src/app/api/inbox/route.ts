@@ -1012,7 +1012,8 @@ type OutlookFullMessage = {
 
 function parseGmailThreadMessage(message: GmailFullMessage): InboxThreadMessage {
   const headers = message.payload?.headers ?? [];
-  const body = extractGmailBodyText(message.payload) || message.snippet || "";
+  const extractedBody = extractGmailBodyText(message.payload);
+  const body = selectReadableBody(extractedBody, message.snippet || "");
   const dateHeader = findHeader(headers, "date");
   const dateValue = dateHeader ? new Date(dateHeader) : null;
   const labelSet = new Set(message.labelIds ?? []);
@@ -1090,6 +1091,18 @@ function extractGmailBodyText(payload: GmailFullMessage["payload"] | undefined):
     return "";
   }
 
+  const plainBody = findPreferredGmailBody(payload, "text/plain");
+
+  if (plainBody) {
+    return normalizeEmailBody(plainBody, false);
+  }
+
+  const htmlBody = findPreferredGmailBody(payload, "text/html");
+
+  if (htmlBody) {
+    return normalizeEmailBody(htmlBody, true);
+  }
+
   const partBody = readBodyFromPart(payload);
 
   if (partBody) {
@@ -1105,6 +1118,24 @@ function extractGmailBodyText(payload: GmailFullMessage["payload"] | undefined):
     const nested = extractNestedBody(part);
     if (nested) {
       return nested;
+    }
+  }
+
+  return "";
+}
+
+function findPreferredGmailBody(part: GmailPayloadPart, mimeType: "text/plain" | "text/html"): string {
+  const normalizedMime = part.mimeType?.toLowerCase() ?? "";
+
+  if (normalizedMime === mimeType) {
+    return decodeGmailData(part.body?.data);
+  }
+
+  for (const child of part.parts ?? []) {
+    const result = findPreferredGmailBody(child, mimeType);
+
+    if (result) {
+      return result;
     }
   }
 
@@ -1181,6 +1212,7 @@ function normalizeEmailBody(raw: string, isHtml: boolean) {
         .replace(/<style[\s\S]*?<\/style>/gi, " ")
         .replace(/<script[\s\S]*?<\/script>/gi, " ")
         .replace(/<head[\s\S]*?<\/head>/gi, " ")
+        .replace(/<!\[if[\s\S]*?<!\[endif\]>/gi, " ")
         .replace(/<!--([\s\S]*?)-->/g, " ")
         .replace(/<[^>]+>/g, " ")
     : raw;
@@ -1188,15 +1220,68 @@ function normalizeEmailBody(raw: string, isHtml: boolean) {
   const withoutNoise = source
     .replace(/https?:\/\/\S+/g, " ")
     .replace(/@font-face\{[\s\S]*?\}/gi, " ")
+    .replace(/@media[\s\S]*?\{[\s\S]*?\}/gi, " ")
     .replace(/[A-Za-z0-9_-]+\{[^{}]{20,}\}/g, " ");
 
-  return withoutNoise
+  const decodedEntities = decodeHtmlEntities(withoutNoise);
+
+  return decodedEntities
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function decodeHtmlEntities(value: string) {
+  const namedEntities: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " ",
+    eacute: "e",
+    egrave: "e",
+    ecirc: "e",
+    agrave: "a",
+    ugrave: "u",
+    ccedil: "c",
+  };
+
+  return value
+    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, decimal) => String.fromCharCode(Number.parseInt(decimal, 10)))
+    .replace(/&([a-zA-Z]+);/g, (match, name) => namedEntities[name.toLowerCase()] ?? match);
+}
+
+function looksLikeCssNoise(value: string) {
+  const normalized = value.toLowerCase();
+  const cssHints = ["@media", "font-face", "!important", "table{", "not(#outlook)"];
+  const hintCount = cssHints.filter((hint) => normalized.includes(hint)).length;
+
+  if (hintCount >= 2) {
+    return true;
+  }
+
+  const punctuationCount = (value.match(/[{};<>]/g) ?? []).length;
+  return punctuationCount > value.length * 0.08;
+}
+
+function selectReadableBody(body: string, snippet: string) {
+  const normalizedBody = body.trim();
+  const normalizedSnippet = normalizeEmailBody(snippet, false);
+
+  if (!normalizedBody) {
+    return normalizedSnippet;
+  }
+
+  if (looksLikeCssNoise(normalizedBody) && normalizedSnippet.length > 0) {
+    return normalizedSnippet;
+  }
+
+  return normalizedBody;
 }
 
 function extractEmailAddress(value: string) {
