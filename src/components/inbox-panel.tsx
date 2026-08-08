@@ -51,6 +51,8 @@ type InboxListResponse = {
       hasAccessToken: boolean;
       hasRefreshToken: boolean;
       lastError: string | null;
+      accountEmail: string | null;
+      fetchedCount: number;
     }>;
   };
 };
@@ -99,11 +101,14 @@ export default function InboxPanel() {
     const query = searchQuery.trim().toLowerCase();
 
     return messages.filter((entry) => {
+      const receivedAtMs = new Date(entry.receivedAt).getTime();
+      const isRecent = !Number.isNaN(receivedAtMs) && Date.now() - receivedAtMs <= 1000 * 60 * 60 * 72;
+
       if (filter === "unread" && !entry.isUnread) {
         return false;
       }
 
-      if (filter === "priority" && entry.isArchived) {
+      if (filter === "priority" && (entry.isArchived || (!entry.isUnread && !isRecent))) {
         return false;
       }
 
@@ -114,6 +119,19 @@ export default function InboxPanel() {
       return [entry.subject, entry.from, entry.snippet].join(" ").toLowerCase().includes(query);
     });
   }, [filter, messages, searchQuery]);
+
+  const connectedAccountsText = useMemo(() => {
+    if (!diagnostics || diagnostics.connectionDiagnostics.length === 0) {
+      return "Connected accounts: none";
+    }
+
+    const labels = diagnostics.connectionDiagnostics.map((row) => {
+      const account = row.accountEmail ?? "unknown account";
+      return `${row.provider.toUpperCase()}: ${account} (${row.status}, ${row.fetchedCount} fetched)`;
+    });
+
+    return `Connected accounts: ${labels.join(" | ")}`;
+  }, [diagnostics]);
 
   const selectedThreadAssignedTo = selectedMessage?.assignedToProfileId ?? null;
 
@@ -282,6 +300,7 @@ export default function InboxPanel() {
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--muted)]">Unified inbox</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Inbox</h1>
+          <p className="mt-1 text-xs text-[var(--muted)]">{connectedAccountsText}</p>
         </div>
         <button
           type="button"
@@ -313,7 +332,7 @@ export default function InboxPanel() {
             ) : (
               diagnostics.connectionDiagnostics.map((row) => (
                 <p key={row.provider}>
-                  {row.provider}: status={row.status}, accessToken={row.hasAccessToken ? "yes" : "no"}, refreshToken={row.hasRefreshToken ? "yes" : "no"}, lastSync={row.lastSyncedAt ?? "never"}
+                  {row.provider}: account={row.accountEmail ?? "unknown"}, status={row.status}, fetched={row.fetchedCount}, accessToken={row.hasAccessToken ? "yes" : "no"}, refreshToken={row.hasRefreshToken ? "yes" : "no"}, lastSync={row.lastSyncedAt ?? "never"}
                   {row.lastError ? `, lastError=${row.lastError}` : ""}
                 </p>
               ))

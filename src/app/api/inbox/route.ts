@@ -30,6 +30,8 @@ type ConnectionDiagnostic = {
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
   lastError: string | null;
+  accountEmail: string | null;
+  fetchedCount: number;
 };
 
 type InboxAssignmentRow = {
@@ -255,6 +257,11 @@ async function getListView() {
 
         if (connection.provider === "gmail") {
           const gmailMessages = await listGmailMessages(accessToken);
+          const diagnostic = context.connectionDiagnostics.find((entry) => entry.provider === "gmail");
+
+          if (diagnostic) {
+            diagnostic.fetchedCount = gmailMessages.length;
+          }
 
           for (const message of gmailMessages) {
             messagesByKey.set(`${message.provider}:${message.messageId}`, message);
@@ -264,6 +271,11 @@ async function getListView() {
         }
 
         const outlookMessages = await listOutlookMessages(accessToken);
+        const diagnostic = context.connectionDiagnostics.find((entry) => entry.provider === "outlook");
+
+        if (diagnostic) {
+          diagnostic.fetchedCount = outlookMessages.length;
+        }
 
         for (const message of outlookMessages) {
           messagesByKey.set(`${message.provider}:${message.messageId}`, message);
@@ -419,7 +431,29 @@ async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContext
     hasAccessToken: Boolean(connection.oauth_access_token),
     hasRefreshToken: Boolean(connection.oauth_refresh_token),
     lastError: connection.last_error ?? null,
+    accountEmail: null,
+    fetchedCount: 0,
   }));
+
+  for (const diagnostic of connectionDiagnostics) {
+    if (diagnostic.status !== "connected") {
+      continue;
+    }
+
+    const connection = connections.find((candidate) => candidate.provider === diagnostic.provider);
+
+    if (!connection) {
+      continue;
+    }
+
+    const accessToken = await resolveConnectionAccessToken(connection);
+
+    if (!accessToken) {
+      continue;
+    }
+
+    diagnostic.accountEmail = await resolveMailboxAccountEmail(diagnostic.provider, accessToken);
+  }
 
   return {
     supabase,
@@ -470,9 +504,9 @@ async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
 
     const messageUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}`);
     messageUrl.searchParams.set("format", "metadata");
-    messageUrl.searchParams.set("metadataHeaders", "From");
-    messageUrl.searchParams.set("metadataHeaders", "Subject");
-    messageUrl.searchParams.set("metadataHeaders", "Date");
+    messageUrl.searchParams.append("metadataHeaders", "From");
+    messageUrl.searchParams.append("metadataHeaders", "Subject");
+    messageUrl.searchParams.append("metadataHeaders", "Date");
 
     const messageResponse = await fetch(messageUrl.toString(), {
       headers: {
@@ -1044,7 +1078,7 @@ function findHeader(headers: GmailHeader[], name: string) {
 
   for (const header of headers) {
     if (header.name?.trim().toLowerCase() === normalized) {
-      return header.value?.trim() || "";
+      return decodeMimeHeader(header.value?.trim() || "");
     }
   }
 
@@ -1101,10 +1135,10 @@ function readBodyFromPart(part: { mimeType?: string; body?: { data?: string } })
   }
 
   if (part.mimeType?.toLowerCase() === "text/html") {
-    return raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return normalizeEmailBody(raw, true);
   }
 
-  return raw.replace(/\s+/g, " ").trim();
+  return normalizeEmailBody(raw, false);
 }
 
 function decodeGmailData(data: string | undefined) {
@@ -1123,6 +1157,48 @@ function decodeGmailData(data: string | undefined) {
   }
 }
 
+function decodeMimeHeader(value: string) {
+  const encodedWordPattern = /=\?([^?]+)\?([BbQq])\?([^?]+)\?=/g;
+
+  return value.replace(encodedWordPattern, (_match, _charset, encoding, payload) => {
+    try {
+      if (String(encoding).toUpperCase() === "B") {
+        return Buffer.from(String(payload), "base64").toString("utf8");
+      }
+
+      return String(payload)
+        .replace(/_/g, " ")
+        .replace(/=([0-9A-Fa-f]{2})/g, (_hex, code) => String.fromCharCode(Number.parseInt(code, 16)));
+    } catch {
+      return value;
+    }
+  });
+}
+
+function normalizeEmailBody(raw: string, isHtml: boolean) {
+  const source = isHtml
+    ? raw
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<head[\s\S]*?<\/head>/gi, " ")
+        .replace(/<!--([\s\S]*?)-->/g, " ")
+        .replace(/<[^>]+>/g, " ")
+    : raw;
+
+  const withoutNoise = source
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/@font-face\{[\s\S]*?\}/gi, " ")
+    .replace(/[A-Za-z0-9_-]+\{[^{}]{20,}\}/g, " ");
+
+  return withoutNoise
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractEmailAddress(value: string) {
   const angleMatch = value.match(/<([^>]+)>/);
   const candidate = (angleMatch?.[1] ?? value).trim();
@@ -1132,6 +1208,39 @@ function extractEmailAddress(value: string) {
   }
 
   return candidate;
+}
+
+async function resolveMailboxAccountEmail(provider: MailProvider, accessToken: string) {
+  if (provider === "gmail") {
+    const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as { emailAddress?: string };
+    return payload.emailAddress?.trim() || null;
+  }
+
+  const response = await fetch("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json()) as { mail?: string; userPrincipalName?: string };
+  const value = payload.mail?.trim() || payload.userPrincipalName?.trim() || "";
+  return value || null;
 }
 
 async function parseProviderError(provider: MailProvider, response: Response) {
