@@ -287,7 +287,18 @@ async function getListView() {
       return new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime();
     });
 
-    const assignments = await loadAssignments(context, messages);
+    let assignments = new Map<string, string | null>();
+
+    try {
+      assignments = await loadAssignments(context, messages);
+    } catch (assignmentError) {
+      warnings.push(
+        assignmentError instanceof Error
+          ? `Inbox assignment lookup failed: ${assignmentError.message}`
+          : "Inbox assignment lookup failed.",
+      );
+    }
+
     const members = await loadWorkspaceMembers(context.supabase);
 
     for (const message of messages) {
@@ -431,7 +442,7 @@ async function resolveConnectionAccessToken(connection: MailboxConnectionRow) {
 async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
   const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
   listUrl.searchParams.set("maxResults", "30");
-  listUrl.searchParams.set("q", "newer_than:30d");
+  listUrl.searchParams.set("q", "newer_than:180d");
 
   const listResponse = await fetch(listUrl.toString(), {
     headers: {
@@ -517,7 +528,7 @@ async function listGmailMessages(accessToken: string): Promise<InboxMessage[]> {
 }
 
 async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]> {
-  const listUrl = new URL("https://graph.microsoft.com/v1.0/me/messages");
+  const listUrl = new URL("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages");
   listUrl.searchParams.set("$top", "30");
   listUrl.searchParams.set("$orderby", "receivedDateTime desc");
   listUrl.searchParams.set(
@@ -537,7 +548,7 @@ async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]>
     throw new Error(await parseProviderError("outlook", response));
   }
 
-  const payload = (await response.json()) as {
+  let payload = (await response.json()) as {
     value?: Array<{
       id?: string;
       conversationId?: string;
@@ -554,6 +565,44 @@ async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]>
       };
     }>;
   };
+
+  if (!Array.isArray(payload.value) || payload.value.length === 0) {
+    const fallbackUrl = new URL("https://graph.microsoft.com/v1.0/me/messages");
+    fallbackUrl.searchParams.set("$top", "30");
+    fallbackUrl.searchParams.set("$orderby", "receivedDateTime desc");
+    fallbackUrl.searchParams.set(
+      "$select",
+      "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead,parentFolderId",
+    );
+
+    const fallbackResponse = await fetch(fallbackUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Prefer: 'outlook.body-content-type="text"',
+      },
+      cache: "no-store",
+    });
+
+    if (fallbackResponse.ok) {
+      payload = (await fallbackResponse.json()) as {
+        value?: Array<{
+          id?: string;
+          conversationId?: string;
+          subject?: string;
+          bodyPreview?: string;
+          receivedDateTime?: string;
+          isRead?: boolean;
+          parentFolderId?: string;
+          from?: {
+            emailAddress?: {
+              address?: string;
+              name?: string;
+            };
+          };
+        }>;
+      };
+    }
+  }
 
   const messages: InboxMessage[] = [];
 
@@ -605,6 +654,10 @@ async function loadAssignments(
 
   if (result.error) {
     if (isMissingRelationError(result.error.message, "inbox_message_assignments")) {
+      return assignmentMap;
+    }
+
+    if (isPermissionDeniedError(result.error.message, "inbox_message_assignments")) {
       return assignmentMap;
     }
 
@@ -1109,4 +1162,9 @@ async function parseProviderError(provider: MailProvider, response: Response) {
 function isMissingRelationError(message: string, relation: string) {
   const normalized = message.toLowerCase();
   return normalized.includes("does not exist") && normalized.includes(relation.toLowerCase());
+}
+
+function isPermissionDeniedError(message: string, relation: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes("permission denied") && normalized.includes(relation.toLowerCase());
 }
