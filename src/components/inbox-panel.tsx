@@ -40,6 +40,19 @@ type InboxListResponse = {
   messages?: InboxMessage[];
   members?: InboxMember[];
   warnings?: string[];
+  diagnostics?: {
+    workspaceId: string;
+    profileId: string;
+    authUserId: string;
+    connectionDiagnostics: Array<{
+      provider: "gmail" | "outlook";
+      status: "connected" | "disconnected" | "pending" | "error";
+      lastSyncedAt: string | null;
+      hasAccessToken: boolean;
+      hasRefreshToken: boolean;
+      lastError: string | null;
+    }>;
+  };
 };
 
 type InboxThreadResponse = {
@@ -75,6 +88,7 @@ export default function InboxPanel() {
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<InboxListResponse["diagnostics"] | null>(null);
 
   const selectedMessage = useMemo(
     () => messages.find((entry) => entry.key === selectedKey) ?? null,
@@ -140,9 +154,11 @@ export default function InboxPanel() {
       const nextMessages = payload.messages ?? [];
       const nextMembers = payload.members ?? [];
       const nextWarnings = payload.warnings ?? [];
+      const nextDiagnostics = payload.diagnostics ?? null;
 
       setMessages(nextMessages);
       setMembers(nextMembers);
+      setDiagnostics(nextDiagnostics);
 
       if (nextWarnings.length > 0) {
         setMessage(nextWarnings.join(" "));
@@ -283,6 +299,27 @@ export default function InboxPanel() {
 
       {message ? (
         <div className="mx-5 mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div>
+      ) : null}
+
+      {messages.length === 0 && diagnostics ? (
+        <div className="mx-5 mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+          <p className="font-semibold uppercase tracking-[0.08em]">Inbox diagnostics</p>
+          <p className="mt-1">
+            Workspace: {diagnostics.workspaceId} | Profile: {diagnostics.profileId} | Auth user: {diagnostics.authUserId}
+          </p>
+          <div className="mt-2 space-y-1">
+            {diagnostics.connectionDiagnostics.length === 0 ? (
+              <p>No Gmail/Outlook mailbox connection row found for this user in this workspace.</p>
+            ) : (
+              diagnostics.connectionDiagnostics.map((row) => (
+                <p key={row.provider}>
+                  {row.provider}: status={row.status}, accessToken={row.hasAccessToken ? "yes" : "no"}, refreshToken={row.hasRefreshToken ? "yes" : "no"}, lastSync={row.lastSyncedAt ?? "never"}
+                  {row.lastError ? `, lastError=${row.lastError}` : ""}
+                </p>
+              ))
+            )}
+          </div>
+        </div>
       ) : null}
 
       <div className="grid min-h-[70vh] grid-cols-1 md:grid-cols-[22rem_minmax(0,1fr)]">

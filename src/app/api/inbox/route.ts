@@ -20,6 +20,16 @@ type MailboxConnectionRow = {
   oauth_access_token: string | null;
   oauth_refresh_token: string | null;
   oauth_token_updated_at: string | null;
+  last_error?: string | null;
+};
+
+type ConnectionDiagnostic = {
+  provider: MailProvider;
+  status: MailboxConnectionRow["status"];
+  lastSyncedAt: string | null;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  lastError: string | null;
 };
 
 type InboxAssignmentRow = {
@@ -67,6 +77,7 @@ type InboxContextSuccess = {
   workspaceId: string;
   profileId: string;
   connections: MailboxConnectionRow[];
+  connectionDiagnostics: ConnectionDiagnostic[];
 };
 
 type InboxContextError = {
@@ -227,6 +238,12 @@ async function getListView() {
     const messagesByKey = new Map<string, InboxMessage>();
     const warnings: string[] = [];
 
+    if (context.connections.length === 0) {
+      warnings.push(
+        "No connected mailbox found for this signed-in account in the current workspace. Open Settings > Mailbox and reconnect Outlook from this same account.",
+      );
+    }
+
     for (const connection of context.connections) {
       try {
         const accessToken = await resolveConnectionAccessToken(connection);
@@ -282,6 +299,12 @@ async function getListView() {
       messages,
       members,
       warnings,
+      diagnostics: {
+        workspaceId: context.workspaceId,
+        profileId: context.profileId,
+        authUserId: context.user.id,
+        connectionDiagnostics: context.connectionDiagnostics,
+      },
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Could not load inbox.";
@@ -366,18 +389,26 @@ async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContext
   const connectionsResult = await supabase
     .from("mailbox_connections")
     .select(
-      "id, workspace_id, profile_id, provider, status, include_sent_mail, last_synced_at, oauth_access_token, oauth_refresh_token, oauth_token_updated_at",
+      "id, workspace_id, profile_id, provider, status, include_sent_mail, last_synced_at, oauth_access_token, oauth_refresh_token, oauth_token_updated_at, last_error",
     )
     .eq("workspace_id", workspaceId)
     .eq("profile_id", profileId)
-    .eq("status", "connected")
     .in("provider", ["gmail", "outlook"]);
 
   if (connectionsResult.error) {
     return { error: connectionsResult.error.message, status: 500 };
   }
 
-  const connections = (connectionsResult.data ?? []) as MailboxConnectionRow[];
+  const allConnections = (connectionsResult.data ?? []) as MailboxConnectionRow[];
+  const connections = allConnections.filter((connection) => connection.status === "connected");
+  const connectionDiagnostics: ConnectionDiagnostic[] = allConnections.map((connection) => ({
+    provider: connection.provider,
+    status: connection.status,
+    lastSyncedAt: connection.last_synced_at,
+    hasAccessToken: Boolean(connection.oauth_access_token),
+    hasRefreshToken: Boolean(connection.oauth_refresh_token),
+    lastError: connection.last_error ?? null,
+  }));
 
   return {
     supabase,
@@ -385,6 +416,7 @@ async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContext
     workspaceId,
     profileId,
     connections,
+    connectionDiagnostics,
   };
 }
 
