@@ -217,60 +217,76 @@ export async function POST(request: NextRequest) {
 }
 
 async function getListView() {
-  const context = await resolveInboxContext();
+  try {
+    const context = await resolveInboxContext();
 
-  if ("error" in context) {
-    return NextResponse.json({ error: context.error }, { status: context.status });
-  }
-
-  const messagesByKey = new Map<string, InboxMessage>();
-
-  for (const connection of context.connections) {
-    const accessToken = await resolveConnectionAccessToken(connection);
-
-    if (!accessToken) {
-      continue;
+    if ("error" in context) {
+      return NextResponse.json({ error: context.error }, { status: context.status });
     }
 
-    if (connection.provider === "gmail") {
-      const gmailMessages = await listGmailMessages(accessToken);
+    const messagesByKey = new Map<string, InboxMessage>();
+    const warnings: string[] = [];
 
-      for (const message of gmailMessages) {
-        messagesByKey.set(`${message.provider}:${message.messageId}`, message);
+    for (const connection of context.connections) {
+      try {
+        const accessToken = await resolveConnectionAccessToken(connection);
+
+        if (!accessToken) {
+          warnings.push(`${connection.provider} mailbox token unavailable. Reconnect mailbox in settings.`);
+          continue;
+        }
+
+        if (connection.provider === "gmail") {
+          const gmailMessages = await listGmailMessages(accessToken);
+
+          for (const message of gmailMessages) {
+            messagesByKey.set(`${message.provider}:${message.messageId}`, message);
+          }
+
+          continue;
+        }
+
+        const outlookMessages = await listOutlookMessages(accessToken);
+
+        for (const message of outlookMessages) {
+          messagesByKey.set(`${message.provider}:${message.messageId}`, message);
+        }
+      } catch (providerError) {
+        warnings.push(
+          providerError instanceof Error
+            ? providerError.message
+            : `Could not load ${connection.provider} messages.`,
+        );
+      }
+    }
+
+    const messages = Array.from(messagesByKey.values());
+
+    messages.sort((left, right) => {
+      if (left.isUnread !== right.isUnread) {
+        return left.isUnread ? -1 : 1;
       }
 
-      continue;
+      return new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime();
+    });
+
+    const assignments = await loadAssignments(context, messages);
+    const members = await loadWorkspaceMembers(context.supabase);
+
+    for (const message of messages) {
+      message.assignedToProfileId = assignments.get(`${message.provider}:${message.messageId}`) ?? null;
     }
 
-    const outlookMessages = await listOutlookMessages(accessToken);
-
-    for (const message of outlookMessages) {
-      messagesByKey.set(`${message.provider}:${message.messageId}`, message);
-    }
+    return NextResponse.json({
+      ok: true,
+      messages,
+      members,
+      warnings,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Could not load inbox.";
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
-
-  const messages = Array.from(messagesByKey.values());
-
-  messages.sort((left, right) => {
-    if (left.isUnread !== right.isUnread) {
-      return left.isUnread ? -1 : 1;
-    }
-
-    return new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime();
-  });
-
-  const assignments = await loadAssignments(context, messages);
-  const members = await loadWorkspaceMembers(context.supabase);
-
-  for (const message of messages) {
-    message.assignedToProfileId = assignments.get(`${message.provider}:${message.messageId}`) ?? null;
-  }
-
-  return NextResponse.json({
-    ok: true,
-    messages,
-    members,
-  });
 }
 
 async function getThreadView(request: NextRequest) {
@@ -303,14 +319,19 @@ async function getThreadView(request: NextRequest) {
     );
   }
 
-  const threadMessages =
-    provider === "gmail"
-      ? await getGmailThread(accessToken, messageId, threadId)
-      : await getOutlookThread(accessToken, messageId, threadId);
+  try {
+    const threadMessages =
+      provider === "gmail"
+        ? await getGmailThread(accessToken, messageId, threadId)
+        : await getOutlookThread(accessToken, messageId, threadId);
 
-  threadMessages.sort((left, right) => new Date(left.receivedAt).getTime() - new Date(right.receivedAt).getTime());
+    threadMessages.sort((left, right) => new Date(left.receivedAt).getTime() - new Date(right.receivedAt).getTime());
 
-  return NextResponse.json({ ok: true, thread: threadMessages });
+    return NextResponse.json({ ok: true, thread: threadMessages });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Could not load thread.";
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
+  }
 }
 
 async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContextError> {

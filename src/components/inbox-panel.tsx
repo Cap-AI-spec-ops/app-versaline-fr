@@ -39,6 +39,7 @@ type InboxListResponse = {
   error?: string;
   messages?: InboxMessage[];
   members?: InboxMember[];
+  warnings?: string[];
 };
 
 type InboxThreadResponse = {
@@ -138,9 +139,14 @@ export default function InboxPanel() {
 
       const nextMessages = payload.messages ?? [];
       const nextMembers = payload.members ?? [];
+      const nextWarnings = payload.warnings ?? [];
 
       setMessages(nextMessages);
       setMembers(nextMembers);
+
+      if (nextWarnings.length > 0) {
+        setMessage(nextWarnings.join(" "));
+      }
 
       if (nextMessages.length === 0) {
         setSelectedKey(null);
