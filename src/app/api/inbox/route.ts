@@ -58,6 +58,19 @@ type InboxThreadMessage = {
   isUnread: boolean;
 };
 
+type InboxContextSuccess = {
+  supabase: NonNullable<Awaited<ReturnType<typeof getSupabaseServerClient>>>;
+  user: { id: string };
+  workspaceId: string;
+  profileId: string;
+  connections: MailboxConnectionRow[];
+};
+
+type InboxContextError = {
+  error: string;
+  status: number;
+};
+
 type InboxActionRequest =
   | {
       action: "mark_read" | "mark_unread" | "archive";
@@ -297,11 +310,11 @@ async function getThreadView(request: NextRequest) {
   return NextResponse.json({ ok: true, thread: threadMessages });
 }
 
-async function resolveInboxContext() {
+async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContextError> {
   const supabase = await getSupabaseServerClient();
 
   if (!supabase) {
-    return { error: "Supabase is unavailable", status: 500 } as const;
+    return { error: "Supabase is unavailable", status: 500 };
   }
 
   const {
@@ -309,13 +322,13 @@ async function resolveInboxContext() {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return { error: "Unauthorized", status: 401 } as const;
+    return { error: "Unauthorized", status: 401 };
   }
 
   const profileResult = await supabase.rpc("get_current_profile");
 
   if (profileResult.error) {
-    return { error: profileResult.error.message, status: 500 } as const;
+    return { error: profileResult.error.message, status: 500 };
   }
 
   const profile = profileResult.data as { id?: string | null; workspace_id?: string | null } | null;
@@ -323,7 +336,7 @@ async function resolveInboxContext() {
   const profileId = profile?.id?.trim() || user.id;
 
   if (!workspaceId) {
-    return { error: "No active workspace found.", status: 422 } as const;
+    return { error: "No active workspace found.", status: 422 };
   }
 
   const connectionsResult = await supabase
@@ -335,18 +348,18 @@ async function resolveInboxContext() {
     .in("provider", ["gmail", "outlook"]);
 
   if (connectionsResult.error) {
-    return { error: connectionsResult.error.message, status: 500 } as const;
+    return { error: connectionsResult.error.message, status: 500 };
   }
 
   const connections = (connectionsResult.data ?? []) as MailboxConnectionRow[];
 
   return {
     supabase,
-    user,
+    user: { id: user.id },
     workspaceId,
     profileId,
     connections,
-  } as const;
+  };
 }
 
 async function resolveConnectionAccessToken(connection: MailboxConnectionRow) {
@@ -513,11 +526,7 @@ async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]>
 }
 
 async function loadAssignments(
-  context: Awaited<ReturnType<typeof resolveInboxContext>> & {
-    workspaceId: string;
-    profileId: string;
-    supabase: NonNullable<Awaited<ReturnType<typeof resolveInboxContext>> extends { supabase: infer T } ? T : never>;
-  },
+  context: InboxContextSuccess,
   messages: InboxMessage[],
 ) {
   const assignmentMap = new Map<string, string | null>();
@@ -549,7 +558,7 @@ async function loadAssignments(
   return assignmentMap;
 }
 
-async function loadWorkspaceMembers(supabase: NonNullable<Awaited<ReturnType<typeof resolveInboxContext>> extends { supabase: infer T } ? T : never>) {
+async function loadWorkspaceMembers(supabase: InboxContextSuccess["supabase"]) {
   const result = await supabase.rpc("get_workspace_members");
 
   if (result.error) {
