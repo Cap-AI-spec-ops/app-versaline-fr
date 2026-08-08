@@ -624,7 +624,7 @@ export async function resolveOutlookAccessToken(connection: MailboxConnectionRow
       client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: "refresh_token",
-      scope: "offline_access openid profile email Mail.Read Calendars.ReadWrite",
+      scope: "offline_access openid profile email Mail.ReadWrite Mail.Send Calendars.ReadWrite",
     }),
   });
 

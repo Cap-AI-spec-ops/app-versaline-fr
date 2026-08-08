@@ -1,5 +1,6 @@
 export const ALLOWED_LANDING_PATHS = [
   "/dashboard",
+  "/inbox",
   "/properties",
   "/contacts",
   "/document-generator",

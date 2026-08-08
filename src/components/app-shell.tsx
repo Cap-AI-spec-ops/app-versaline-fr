@@ -28,12 +28,17 @@ const baseNavItems: NavItem[] = [
     label: "Document generator",
     shortLabel: "AI",
   },
+  { href: "/inbox", label: "Inbox", shortLabel: "IN" },
 ];
 
 const titles: Record<string, { title: string; subtitle: string }> = {
   "/dashboard": {
     title: "Dashboard",
     subtitle: "Monitor your property operations and document flow.",
+  },
+  "/inbox": {
+    title: "Inbox",
+    subtitle: "Review and manage your incoming conversations.",
   },
   "/calendar": {
     title: "Calendar",

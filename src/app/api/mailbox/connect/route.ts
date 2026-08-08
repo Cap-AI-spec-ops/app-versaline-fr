@@ -91,7 +91,7 @@ export async function GET(request: NextRequest) {
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set(
       "scope",
-      "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events",
+      "openid email profile https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events",
     );
     authUrl.searchParams.set("access_type", "offline");
     authUrl.searchParams.set("prompt", "consent");
@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
     provider,
     options: {
       redirectTo,
-      scopes: "openid email profile offline_access Mail.Read Calendars.ReadWrite",
+      scopes: "openid email profile offline_access Mail.ReadWrite Mail.Send Calendars.ReadWrite",
     },
   });
 
