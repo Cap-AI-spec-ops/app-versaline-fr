@@ -502,32 +502,34 @@ async function listOutlookMessages(accessToken: string): Promise<InboxMessage[]>
     }>;
   };
 
-  return (payload.value ?? [])
-    .map((message) => {
-      const id = message.id?.trim();
+  const messages: InboxMessage[] = [];
 
-      if (!id) {
-        return null;
-      }
+  for (const message of payload.value ?? []) {
+    const id = message.id?.trim();
 
-      return {
-        key: `outlook:${id}`,
-        provider: "outlook" as const,
-        messageId: id,
-        threadId: message.conversationId?.trim() || null,
-        subject: message.subject?.trim() || "(No subject)",
-        from:
-          message.from?.emailAddress?.name?.trim() ||
-          message.from?.emailAddress?.address?.trim() ||
-          "Unknown sender",
-        snippet: message.bodyPreview?.trim() || "",
-        receivedAt: message.receivedDateTime?.trim() || new Date().toISOString(),
-        isUnread: !Boolean(message.isRead),
-        isArchived: false,
-        assignedToProfileId: null,
-      } satisfies InboxMessage;
-    })
-    .filter((item): item is InboxMessage => Boolean(item));
+    if (!id) {
+      continue;
+    }
+
+    messages.push({
+      key: `outlook:${id}`,
+      provider: "outlook",
+      messageId: id,
+      threadId: message.conversationId?.trim() || null,
+      subject: message.subject?.trim() || "(No subject)",
+      from:
+        message.from?.emailAddress?.name?.trim() ||
+        message.from?.emailAddress?.address?.trim() ||
+        "Unknown sender",
+      snippet: message.bodyPreview?.trim() || "",
+      receivedAt: message.receivedDateTime?.trim() || new Date().toISOString(),
+      isUnread: !Boolean(message.isRead),
+      isArchived: false,
+      assignedToProfileId: null,
+    });
+  }
+
+  return messages;
 }
 
 async function loadAssignments(
