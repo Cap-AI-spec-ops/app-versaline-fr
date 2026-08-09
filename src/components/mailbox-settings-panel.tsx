@@ -157,9 +157,12 @@ function clearOAuthReturnMarkers() {
   }
 }
 
-export default function MailboxSettingsPanel() {
+export default function MailboxSettingsPanel({ embedded = false }: { embedded?: boolean }) {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const { workspace, currentRole, isLoading: isWorkspaceLoading, error: workspaceError } = useCurrentWorkspace();
+  const surfaceClassName = embedded
+    ? "settings-surface w-full space-y-6"
+    : "settings-surface mx-auto w-full max-w-5xl space-y-6";
 
   const [profileId, setProfileId] = useState<string | null>(null);
   const [rowsByProvider, setRowsByProvider] = useState<Record<MailProvider, MailboxConnectionRow | null>>({
@@ -793,7 +796,7 @@ export default function MailboxSettingsPanel() {
     const canManagePolicy = currentRole === "super_admin" || currentRole === "owner";
 
     return (
-      <section className="settings-surface mx-auto w-full max-w-5xl space-y-6">
+      <section className={surfaceClassName}>
         <div className="rounded-[24px] border border-amber-200 bg-amber-50 px-5 py-5">
           <p className="text-sm font-semibold text-amber-800">Email automation is disabled</p>
           <p className="mt-2 text-sm text-amber-700">
@@ -815,21 +818,32 @@ export default function MailboxSettingsPanel() {
   }
 
   return (
-    <section className="settings-surface mx-auto w-full max-w-5xl space-y-6">
+    <section className={surfaceClassName}>
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">Mailbox</p>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Inbox connections</h1>
-        <p className="mt-4 text-base leading-7 text-[var(--muted)]">
-          Connect your mailbox providers so Versaline can triage and summarize client emails into CRM timelines.
-        </p>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Link
-            href="/settings/daily-briefing"
-            className="rounded-xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
-          >
-            Open daily briefing settings
-          </Link>
-        </div>
+        {embedded ? (
+          <>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Inbox connections</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+              Connect your mailbox provider so summaries and email automation work reliably.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Inbox connections</h1>
+            <p className="mt-4 text-base leading-7 text-[var(--muted)]">
+              Connect your mailbox providers so Versaline can triage and summarize client emails into CRM timelines.
+            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <Link
+                href="/settings/daily-briefing"
+                className="rounded-xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+              >
+                Open daily briefing settings
+              </Link>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="space-y-4">
@@ -841,7 +855,9 @@ export default function MailboxSettingsPanel() {
               onClick={() => setSelectedProvider(provider.id)}
               className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
                 selectedProvider === provider.id
-                  ? "bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] text-white shadow-md shadow-[rgba(59,130,246,0.2)]"
+                  ? provider.id === "gmail"
+                    ? "bg-[linear-gradient(135deg,#2563eb_0%,#1d4ed8_100%)] text-white shadow-md shadow-[rgba(37,99,235,0.28)]"
+                    : "bg-[linear-gradient(135deg,#0f766e_0%,#0d9488_100%)] text-white shadow-md shadow-[rgba(13,148,136,0.28)]"
                   : "text-[var(--foreground)] hover:bg-slate-100"
               }`}
             >
@@ -895,7 +911,11 @@ export default function MailboxSettingsPanel() {
                   type="button"
                   onClick={() => void markConnected(provider.id)}
                   disabled={isSaving || isPending || (connected && !reconnectRequired)}
-                  className="rounded-xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-3 py-2 text-sm font-semibold text-white shadow-md shadow-[rgba(59,130,246,0.2)] disabled:opacity-70"
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold text-white shadow-md disabled:opacity-70 ${
+                    provider.id === "gmail"
+                      ? "bg-[linear-gradient(135deg,#2563eb_0%,#1d4ed8_100%)] shadow-[rgba(37,99,235,0.28)]"
+                      : "bg-[linear-gradient(135deg,#0f766e_0%,#0d9488_100%)] shadow-[rgba(13,148,136,0.28)]"
+                  }`}
                 >
                   {connected ? (reconnectRequired ? "Reconnect now" : "Connected") : isPending ? "Connecting..." : "Connect"}
                 </button>

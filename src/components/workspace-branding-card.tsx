@@ -221,7 +221,7 @@ export default function WorkspaceBrandingCard() {
       {isCardOpen ? (
         <form onSubmit={(event) => void handleSave(event)} className="mt-4 space-y-4">
           {!canEditBranding ? (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
               Your current role is {role.replace("_", " ")}. Only team leads, owners, and super admins can edit these document branding fields.
             </div>
           ) : null}
@@ -291,7 +291,7 @@ export default function WorkspaceBrandingCard() {
                     className="min-w-0 flex-1 bg-transparent font-mono text-sm text-[var(--foreground)] outline-none"
                   />
                 </div>
-                <div className="rounded-xl border border-[var(--border)] bg-white/60 px-3 py-2 text-xs text-[var(--muted)]">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   Preview:
                   <span className="ml-2 inline-flex items-center gap-2 align-middle">
                     <span className="h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: accentColor }} aria-hidden="true" />
@@ -377,7 +377,7 @@ export default function WorkspaceBrandingCard() {
             </LabeledField>
           </div>
 
-          <div className="rounded-2xl border border-[var(--border)] bg-white/70 px-4 py-4 text-sm text-[var(--muted)]">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-700">
             The document generator is blocked only by "Mandatory by law" fields.
             "Required if holding funds" fields should be completed when your agency handles client funds.
             The logo remains optional. For now, logo entry uses a direct URL field rather than file upload.
@@ -443,10 +443,10 @@ function buildFieldLabel(name: string, status: "Mandatory by law" | "Required if
 
 function FieldStatusBadge(props: { text: "Mandatory by law" | "Required if holding funds" | "Recommended" }) {
   const className = props.text === "Mandatory by law"
-    ? "border border-red-300 bg-red-100 text-red-800 dark:border-red-700/80 dark:bg-red-900/45 dark:text-red-100"
+    ? "border border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700/80 dark:bg-rose-900/45 dark:text-rose-100"
     : props.text === "Required if holding funds"
-      ? "border border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-700/80 dark:bg-amber-900/45 dark:text-amber-100"
-      : "border border-slate-300 bg-slate-100 text-slate-800 dark:border-slate-600/80 dark:bg-slate-700/55 dark:text-slate-100";
+      ? "border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700/80 dark:bg-amber-900/45 dark:text-amber-100"
+      : "border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-600/80 dark:bg-slate-700/55 dark:text-slate-100";
 
   return <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${className}`}>{props.text}</span>;
 }

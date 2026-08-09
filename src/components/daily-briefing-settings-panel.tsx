@@ -102,9 +102,12 @@ function normalizeWeekdays(value: number[] | null | undefined) {
   });
 }
 
-export default function DailyBriefingSettingsPanel() {
+export default function DailyBriefingSettingsPanel({ embedded = false }: { embedded?: boolean }) {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const { workspace, currentRole, isLoading: isWorkspaceLoading, error: workspaceError } = useCurrentWorkspace();
+  const surfaceClassName = embedded
+    ? "settings-surface w-full space-y-6"
+    : "settings-surface mx-auto w-full max-w-5xl space-y-6";
 
   const [profileId, setProfileId] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<DailyBriefingPreferences>({
@@ -445,13 +448,24 @@ export default function DailyBriefingSettingsPanel() {
   }
 
   return (
-    <section className="settings-surface mx-auto w-full max-w-5xl space-y-6">
+    <section className={surfaceClassName}>
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">Daily Briefing</p>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Daily briefing preferences</h1>
-        <p className="mt-4 text-base leading-7 text-[var(--muted)]">
-          Choose when your AI daily briefing is created and delivered, and preview content before automation runs.
-        </p>
+        {embedded ? (
+          <>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Daily briefing preferences</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+              Choose when your daily briefing is generated and delivered, then test it before turning it on.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Daily briefing preferences</h1>
+            <p className="mt-4 text-base leading-7 text-[var(--muted)]">
+              Choose when your AI daily briefing is created and delivered, and preview content before automation runs.
+            </p>
+          </>
+        )}
       </div>
 
       <form onSubmit={savePreferences} className="settings-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
@@ -674,7 +688,7 @@ export default function DailyBriefingSettingsPanel() {
 
       <div className="settings-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
         <p className="text-sm font-semibold text-[var(--foreground)]">Validation tools</p>
-        <p className="mt-1 text-sm text-[var(--muted)]">Preview the briefing payload or send one test email to your own inbox.</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">Preview your daily briefing or send a test email to yourself.</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
@@ -682,7 +696,7 @@ export default function DailyBriefingSettingsPanel() {
             disabled={isPreviewLoading || controlsDisabled}
             className="rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {isPreviewLoading ? "Generating preview..." : "Preview mode"}
+            {isPreviewLoading ? "Generating preview..." : "Preview briefing"}
           </button>
           <button
             type="button"
@@ -690,7 +704,7 @@ export default function DailyBriefingSettingsPanel() {
             disabled={isTestSending || controlsDisabled}
             className="rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {isTestSending ? "Sending test..." : "Test-send mode"}
+            {isTestSending ? "Sending test..." : "Send test email"}
           </button>
         </div>
 

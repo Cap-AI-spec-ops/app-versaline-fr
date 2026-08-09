@@ -584,7 +584,6 @@ export default function AdminManagementPanel() {
       <div className="admin-section space-y-3">
         <div className="admin-section-header">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Advanced actions</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">Less frequent actions are collapsed by default to reduce noise.</p>
         </div>
 
         <div className="admin-disclosure">

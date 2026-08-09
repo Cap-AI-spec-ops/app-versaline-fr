@@ -15,7 +15,17 @@ type VerifiedFactor = {
   status: string;
 };
 
-export default function MfaSettingsPanel() {
+type MfaSettingsPanelProps = {
+  showCommunicationShortcuts?: boolean;
+  showSecurityCard?: boolean;
+  onlySecurityCard?: boolean;
+};
+
+export default function MfaSettingsPanel({
+  showCommunicationShortcuts = true,
+  showSecurityCard = true,
+  onlySecurityCard = false,
+}: MfaSettingsPanelProps) {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const { workspace } = useCurrentWorkspace();
 
@@ -346,6 +356,67 @@ export default function MfaSettingsPanel() {
     await loadSettings();
   };
 
+  const renderSecurityCard = () => (
+    <div className="settings-card settings-security-card rounded-[24px] border border-red-200 bg-[linear-gradient(160deg,rgba(255,246,246,0.92)_0%,rgba(255,255,255,0.98)_45%,rgba(255,244,245,0.9)_100%)] px-5 py-5 shadow-sm dark:border-red-800/50 dark:bg-[linear-gradient(155deg,rgba(30,20,24,0.92)_0%,rgba(20,16,22,0.95)_48%,rgba(28,18,22,0.93)_100%)]">
+      <p className="text-sm font-semibold text-[var(--foreground)]">Security</p>
+      <p className="mt-1 text-sm text-[var(--muted)]">Manage password reset and two-factor authentication in one security box.</p>
+
+      <form onSubmit={handlePasswordChange} className="mt-4 space-y-3">
+        <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required placeholder="Current password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
+        <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required minLength={8} placeholder="New password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
+        <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={8} placeholder="Confirm new password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
+        {securityMessage ? <p className="text-sm font-medium text-red-500">{securityMessage}</p> : null}
+        <button type="submit" disabled={isSaving} className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70 dark:border-red-700/70 dark:bg-red-900/28 dark:text-red-100 dark:hover:bg-red-900/40">Update password</button>
+      </form>
+
+      <div className="mt-6 border-t border-red-200 pt-5 dark:border-red-800/55">
+        <p className="text-sm font-semibold text-[var(--foreground)]">Two-factor authentication</p>
+        <p className="mt-2 text-sm text-[var(--muted)]">{isLoading ? "Checking factors..." : verifiedFactors.length > 0 ? "2FA is enabled." : "2FA is not enabled yet."}</p>
+
+        <div className="mt-4">
+          {verifiedFactors.length > 0 ? (
+            <div className="space-y-3">
+              {verifiedFactors.map((factor) => (
+                <div key={factor.id} className="flex flex-col gap-3 rounded-2xl border border-red-200 bg-white/80 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-[var(--foreground)]">{factor.friendly_name || "Authenticator app"}</p>
+                    <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">{factor.factor_type} - {factor.status}</p>
+                  </div>
+                  <button type="button" onClick={() => void handleDisableFactor(factor.id)} disabled={isSaving} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70">Disable</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <button type="button" onClick={() => void handleStartEnrollment()} disabled={isSaving} className="rounded-2xl bg-[linear-gradient(135deg,#ef4444_0%,#dc2626_100%)] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-[rgba(220,38,38,0.26)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70">{isSaving ? "Starting..." : "Enable 2FA"}</button>
+          )}
+
+          {qrCodeSvg ? (
+            <div className="mt-6 rounded-2xl border border-red-200 bg-white p-4">
+              <p className="text-sm font-medium text-[var(--foreground)]">1. Scan this QR code in your authenticator app.</p>
+              <div className="mt-4 flex justify-center rounded-xl border border-red-200 bg-slate-50 p-4" dangerouslySetInnerHTML={{ __html: qrCodeSvg }} />
+              <form onSubmit={handleVerifyEnrollment} className="mt-4 space-y-3">
+                <label htmlFor="enrollment-code" className="text-sm font-medium text-[var(--foreground)]">2. Enter the 6-digit code from the app.</label>
+                <input id="enrollment-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={enrollmentCode} onChange={(event) => setEnrollmentCode(event.target.value.replace(/\D/g, "").slice(0, 6))} required className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm tracking-[0.3em] outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" placeholder="123456" />
+                <button type="submit" disabled={isSaving} className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-70">{isSaving ? "Verifying..." : "Verify and activate"}</button>
+              </form>
+            </div>
+          ) : null}
+
+          {error ? <p className="mt-4 text-sm font-medium text-red-500">{error}</p> : null}
+          {mfaMessage ? <p className="mt-4 text-sm font-medium text-red-500">{mfaMessage}</p> : null}
+        </div>
+      </div>
+    </div>
+  );
+
+  if (onlySecurityCard) {
+    return (
+      <section className="settings-surface mx-auto w-full max-w-5xl space-y-6">
+        {renderSecurityCard()}
+      </section>
+    );
+  }
+
   return (
     <section className="settings-surface mx-auto w-full max-w-5xl space-y-6">
       <div>
@@ -365,24 +436,26 @@ export default function MfaSettingsPanel() {
       </div>
 
       <div className="space-y-4">
-        {isEmailPolicyLoading ? null : isEmailAutomationEnabled ? (
+        {showCommunicationShortcuts && (isEmailPolicyLoading ? null : (
           <div className="settings-card settings-email-automation-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
-            <p className="text-sm font-semibold text-[var(--foreground)]">Email automation</p>
+            <p className="text-sm font-semibold text-[var(--foreground)]">Email and daily briefing</p>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Configure mailbox connections and company-approved AI triage controls.
+              {isEmailAutomationEnabled
+                ? "Manage mailbox connection, email automation, and daily briefing delivery."
+                : "Open mailbox and daily briefing pages. Some features may be disabled by company policy."}
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <Link
-                href="/settings/mailbox"
+                href="#mailbox-settings-inline"
                 className="settings-email-automation-link rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
               >
-                Open mailbox settings
+                Mailbox settings
               </Link>
               <Link
-                href="/settings/daily-briefing"
+                href="#daily-briefing-settings-inline"
                 className="settings-email-automation-link rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
               >
-                Open daily briefing settings
+                Daily briefing settings
               </Link>
               {currentRole === "super_admin" || currentRole === "owner" ? (
                 <Link
@@ -393,8 +466,13 @@ export default function MfaSettingsPanel() {
                 </Link>
               ) : null}
             </div>
+            {!isEmailAutomationEnabled ? (
+              <p className="mt-3 text-xs text-[var(--muted)]">
+                Your admin currently has email automation turned off for this workspace.
+              </p>
+            ) : null}
           </div>
-        ) : null}
+        ))}
 
         <form onSubmit={handleProfileSave} className="settings-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-4 py-4 shadow-sm md:px-5 md:py-5">
           <p className="text-sm font-semibold text-[var(--foreground)]">Profile</p>
@@ -412,56 +490,7 @@ export default function MfaSettingsPanel() {
 
         {currentRole === "team_lead" || currentRole === "agent" ? <WorkspaceSummaryCard /> : null}
 
-        <div className="settings-card settings-security-card rounded-[24px] border border-red-200 bg-[linear-gradient(160deg,rgba(255,246,246,0.92)_0%,rgba(255,255,255,0.98)_45%,rgba(255,244,245,0.9)_100%)] px-5 py-5 shadow-sm dark:border-red-800/50 dark:bg-[linear-gradient(155deg,rgba(30,20,24,0.92)_0%,rgba(20,16,22,0.95)_48%,rgba(28,18,22,0.93)_100%)]">
-          <p className="text-sm font-semibold text-[var(--foreground)]">Security</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">Manage password reset and two-factor authentication in one security box.</p>
-
-          <form onSubmit={handlePasswordChange} className="mt-4 space-y-3">
-            <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required placeholder="Current password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
-            <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required minLength={8} placeholder="New password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
-            <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={8} placeholder="Confirm new password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
-            {securityMessage ? <p className="text-sm font-medium text-red-500">{securityMessage}</p> : null}
-            <button type="submit" disabled={isSaving} className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70 dark:border-red-700/70 dark:bg-red-900/28 dark:text-red-100 dark:hover:bg-red-900/40">Update password</button>
-          </form>
-
-          <div className="mt-6 border-t border-red-200 pt-5 dark:border-red-800/55">
-            <p className="text-sm font-semibold text-[var(--foreground)]">Two-factor authentication</p>
-            <p className="mt-2 text-sm text-[var(--muted)]">{isLoading ? "Checking factors..." : verifiedFactors.length > 0 ? "2FA is enabled." : "2FA is not enabled yet."}</p>
-
-            <div className="mt-4">
-              {verifiedFactors.length > 0 ? (
-                <div className="space-y-3">
-                  {verifiedFactors.map((factor) => (
-                    <div key={factor.id} className="flex flex-col gap-3 rounded-2xl border border-red-200 bg-white/80 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-red-800/55 dark:bg-slate-900/45">
-                      <div>
-                        <p className="text-sm font-semibold text-[var(--foreground)]">{factor.friendly_name || "Authenticator app"}</p>
-                        <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">{factor.factor_type} - {factor.status}</p>
-                      </div>
-                      <button type="button" onClick={() => void handleDisableFactor(factor.id)} disabled={isSaving} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70 dark:border-red-700/70 dark:bg-red-900/28 dark:text-red-100 dark:hover:bg-red-900/40">Disable</button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <button type="button" onClick={() => void handleStartEnrollment()} disabled={isSaving} className="rounded-2xl bg-[linear-gradient(135deg,#ef4444_0%,#dc2626_100%)] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-[rgba(220,38,38,0.26)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-[linear-gradient(135deg,#ef4444_0%,#b91c1c_100%)] dark:shadow-[0_10px_20px_rgba(185,28,28,0.3)]">{isSaving ? "Starting..." : "Enable 2FA"}</button>
-              )}
-
-              {qrCodeSvg ? (
-                <div className="mt-6 rounded-2xl border border-red-200 bg-white p-4 dark:border-red-800/55 dark:bg-slate-900/45">
-                  <p className="text-sm font-medium text-[var(--foreground)]">1. Scan this QR code in your authenticator app.</p>
-                  <div className="mt-4 flex justify-center rounded-xl border border-red-200 bg-slate-50 p-4 dark:border-red-800/55 dark:bg-slate-900/55" dangerouslySetInnerHTML={{ __html: qrCodeSvg }} />
-                  <form onSubmit={handleVerifyEnrollment} className="mt-4 space-y-3">
-                    <label htmlFor="enrollment-code" className="text-sm font-medium text-[var(--foreground)]">2. Enter the 6-digit code from the app.</label>
-                    <input id="enrollment-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={enrollmentCode} onChange={(event) => setEnrollmentCode(event.target.value.replace(/\D/g, "").slice(0, 6))} required className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm tracking-[0.3em] outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" placeholder="123456" />
-                    <button type="submit" disabled={isSaving} className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-70">{isSaving ? "Verifying..." : "Verify and activate"}</button>
-                  </form>
-                </div>
-              ) : null}
-
-              {error ? <p className="mt-4 text-sm font-medium text-red-500">{error}</p> : null}
-              {mfaMessage ? <p className="mt-4 text-sm font-medium text-red-500">{mfaMessage}</p> : null}
-            </div>
-          </div>
-        </div>
+        {showSecurityCard ? renderSecurityCard() : null}
       </div>
     </section>
   );

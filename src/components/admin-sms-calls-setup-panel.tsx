@@ -55,7 +55,6 @@ export default function AdminSmsCallsSetupPanel() {
   const [isWhatsAppSaving, setIsWhatsAppSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [twilioControlMode, setTwilioControlMode] = useState<"owner_locked" | "team_lead_select">("owner_locked");
 
   const [countryCode, setCountryCode] = useState("FR");
@@ -332,19 +331,9 @@ export default function AdminSmsCallsSetupPanel() {
             One-click number provisioning for SMS and voice, with optional WhatsApp activation started in the same flow.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setIsPanelOpen((open) => !open)}
-          className="admin-disclosure-hint"
-          aria-expanded={isPanelOpen}
-        >
-          {isPanelOpen ? "Hide" : "Open"}
-        </button>
       </div>
 
-      {!isPanelOpen ? <p className="mt-3 text-sm text-[var(--muted)]">This section is collapsed.</p> : null}
-
-      {isPanelOpen && !isLoading ? (
+      {!isLoading ? (
         <div className="mt-4 space-y-6">
           {error ? <p className="text-sm font-medium text-red-600">{error}</p> : null}
           {message ? <p className="text-sm font-medium text-emerald-700">{message}</p> : null}
@@ -575,7 +564,9 @@ export default function AdminSmsCallsSetupPanel() {
             )}
           </div>
         </div>
-      ) : null}
+      ) : (
+        <p className="mt-3 text-sm text-[var(--muted)]">Loading managed setup...</p>
+      )}
     </div>
   );
 }
