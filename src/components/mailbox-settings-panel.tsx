@@ -183,6 +183,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
   const [signatureColor, setSignatureColor] = useState("#1f2937");
   const [selectedSignatureImageWidth, setSelectedSignatureImageWidth] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isEmailFeatureEnabled, setIsEmailFeatureEnabled] = useState(false);
   const [isPolicyLoading, setIsPolicyLoading] = useState(true);
@@ -556,6 +557,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
 
     setIsSyncing(true);
     setError(null);
+    setConnectionMessage(null);
     setMessage(null);
 
     try {
@@ -611,7 +613,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
 
       const processed = result.processedMessages ?? 0;
       const saved = result.savedSummaries ?? 0;
-      setMessage(`Sync complete: ${processed} email(s) processed, ${saved} summary(ies) saved.`);
+      setConnectionMessage(`Sync complete: ${processed} email(s) processed, ${saved} summary(ies) saved.`);
       setIsSyncing(false);
     } catch {
       setError("Mailbox sync failed.");
@@ -698,6 +700,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
 
     setIsSaving(true);
     setError(null);
+    setConnectionMessage(null);
     setMessage(null);
 
     const { error: upsertError } = await supabase
@@ -740,7 +743,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
     }
 
     setIsSaving(false);
-    setMessage(`Starting ${provider === "gmail" ? "Gmail" : "Outlook"} OAuth flow...`);
+    setConnectionMessage(`Starting ${provider === "gmail" ? "Gmail" : "Outlook"} OAuth flow...`);
 
     try {
       window.sessionStorage.setItem(MAILBOX_OAUTH_PROVIDER_STORAGE_KEY, provider);
@@ -760,6 +763,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
 
     setIsSaving(true);
     setError(null);
+    setConnectionMessage(null);
     setMessage(null);
 
     const { error: updateError } = await supabase
@@ -781,8 +785,25 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
 
     await loadMailboxSettings(workspace.id);
     setIsSaving(false);
-    setMessage(`${provider === "gmail" ? "Gmail" : "Outlook"} disconnected.`);
+    setConnectionMessage(`${provider === "gmail" ? "Gmail" : "Outlook"} disconnected.`);
   }
+
+  const connectedProviders = PROVIDERS.filter((provider) => rowsByProvider[provider.id]?.status === "connected");
+  const reconnectRequiredCount = connectedProviders.filter((provider) =>
+    isReconnectRequired(rowsByProvider[provider.id]?.oauth_token_updated_at),
+  ).length;
+  const currentMailboxState =
+    connectedProviders.length === 0
+      ? "No mailbox connected yet."
+      : reconnectRequiredCount > 0
+        ? "Mailbox connected but reconnect is required."
+        : "Mailbox connected and syncing is available.";
+  const mailboxNextAction =
+    connectedProviders.length === 0
+      ? "Connect Gmail or Outlook, then run Sync now."
+      : reconnectRequiredCount > 0
+        ? "Use Reconnect now on your provider, then run Sync now."
+        : "Review summary preferences and save them for your workflow.";
 
   if (workspaceError) {
     return <p className="text-sm text-red-600">{workspaceError}</p>;
@@ -825,7 +846,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
           <>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Inbox connections</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              Connect your mailbox provider so summaries and email automation work reliably.
+              Connect your mailbox provider so summaries, calendar sync, and email automation work reliably.
             </p>
           </>
         ) : (
@@ -839,11 +860,21 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
                 href="/settings/daily-briefing"
                 className="rounded-xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
               >
-                Open daily briefing settings
+                Open daily email briefing
               </Link>
             </div>
           </>
         )}
+      </div>
+
+      <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Communication - Step 1</p>
+        <h3 className="mt-2 text-xl font-semibold tracking-tight text-[var(--foreground)]">Connect mailbox</h3>
+        <div className="mt-3 space-y-2 text-sm">
+          <p className="text-[var(--foreground)]"><span className="font-semibold">Current state:</span> {currentMailboxState}</p>
+          <p className="text-[var(--foreground)]"><span className="font-semibold">Why it matters:</span> Email connection powers AI summaries, CRM timeline updates, and reliable daily briefing sources.</p>
+          <p className="text-[var(--foreground)]"><span className="font-semibold">Next action:</span> {mailboxNextAction}</p>
+        </div>
       </div>
 
       <div className="space-y-4">
@@ -936,6 +967,8 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
                   {isSyncing ? "Syncing..." : "Sync now"}
                 </button>
               </div>
+
+              {connectionMessage ? <p className="mt-3 text-sm font-medium text-emerald-700">{connectionMessage}</p> : null}
             </article>
           );
         })()}
@@ -990,6 +1023,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
               <option value="es">Spanish</option>
               <option value="de">German</option>
             </select>
+            <p className="text-xs text-[var(--muted)] settings-helper">This sets the language for timeline summaries generated from synced emails.</p>
           </label>
         </div>
 
@@ -1081,6 +1115,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
               className="hidden"
             />
           </div>
+          <p className="text-xs text-[var(--muted)] settings-helper">Use font, size, color, and formatting controls to match your default outgoing email style.</p>
 
           <div
             ref={signatureEditorRef}
@@ -1160,7 +1195,7 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
             disabled={isSaving}
             className="rounded-xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50 disabled:opacity-60"
           >
-            Save preferences
+            Save changes
           </button>
           <Link
             href="/settings"

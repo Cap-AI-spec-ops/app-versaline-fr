@@ -73,8 +73,8 @@ const titles: Record<string, { title: string; subtitle: string }> = {
     subtitle: "Connect inbox providers and tune personal email summary preferences.",
   },
   "/settings/daily-briefing": {
-    title: "Daily Briefing",
-    subtitle: "Configure your AI daily summary schedule, language, and delivery settings.",
+    title: "Daily email briefing",
+    subtitle: "Configure your AI email briefing schedule, language, and delivery settings.",
   },
   "/admin/email-policy": {
     title: "Email Policy",

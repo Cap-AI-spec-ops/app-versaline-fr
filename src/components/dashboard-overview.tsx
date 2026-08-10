@@ -331,20 +331,7 @@ export default async function DashboardOverview() {
           <p className="mt-4 max-w-2xl text-base leading-7 text-blue-100/90">
             A compact view of your CRM pulse, recent updates, and the next actions worth attention.
           </p>
-          <div className="mt-6 flex flex-wrap gap-3 text-sm">
-            <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 font-medium text-white/90">
-              Active contacts {activeContactsCount}
-            </span>
-            <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 font-medium text-white/90">
-              High priority {highPriorityCount}
-            </span>
-            <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 font-medium text-white/90">
-              Follow-ups next 7 days {followUpCount}
-            </span>
-            <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 font-medium text-white/90">
-              Latest activity {latestActivityLabel}
-            </span>
-          </div>
+
         </div>
       </div>
 

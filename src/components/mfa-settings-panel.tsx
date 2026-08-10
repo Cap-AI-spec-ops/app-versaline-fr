@@ -365,8 +365,12 @@ export default function MfaSettingsPanel({
         <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required placeholder="Current password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
         <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required minLength={8} placeholder="New password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
         <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={8} placeholder="Confirm new password" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" />
-        {securityMessage ? <p className="text-sm font-medium text-red-500">{securityMessage}</p> : null}
-        <button type="submit" disabled={isSaving} className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70 dark:border-red-700/70 dark:bg-red-900/28 dark:text-red-100 dark:hover:bg-red-900/40">Update password</button>
+        <button type="submit" disabled={isSaving} className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70 dark:border-red-700/70 dark:bg-red-900/28 dark:text-red-100 dark:hover:bg-red-900/40">Save changes</button>
+        {securityMessage ? (
+          <p className={`text-sm font-medium ${securityMessage === "Password updated." ? "text-emerald-700" : "text-red-500"}`}>
+            {securityMessage}
+          </p>
+        ) : null}
       </form>
 
       <div className="mt-6 border-t border-red-200 pt-5 dark:border-red-800/55">
@@ -398,12 +402,21 @@ export default function MfaSettingsPanel({
                 <label htmlFor="enrollment-code" className="text-sm font-medium text-[var(--foreground)]">2. Enter the 6-digit code from the app.</label>
                 <input id="enrollment-code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={enrollmentCode} onChange={(event) => setEnrollmentCode(event.target.value.replace(/\D/g, "").slice(0, 6))} required className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm tracking-[0.3em] outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100 dark:focus:border-red-500 dark:focus:ring-red-900/40" placeholder="123456" />
                 <button type="submit" disabled={isSaving} className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-70">{isSaving ? "Verifying..." : "Verify and activate"}</button>
+                {mfaMessage ? (
+                  <p className={`text-sm font-medium ${mfaMessage.includes("enabled") || mfaMessage.includes("disabled") ? "text-emerald-700" : "text-red-500"}`}>
+                    {mfaMessage}
+                  </p>
+                ) : null}
               </form>
             </div>
           ) : null}
 
           {error ? <p className="mt-4 text-sm font-medium text-red-500">{error}</p> : null}
-          {mfaMessage ? <p className="mt-4 text-sm font-medium text-red-500">{mfaMessage}</p> : null}
+          {!qrCodeSvg && mfaMessage ? (
+            <p className={`mt-4 text-sm font-medium ${mfaMessage.includes("enabled") || mfaMessage.includes("disabled") ? "text-emerald-700" : "text-red-500"}`}>
+              {mfaMessage}
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
@@ -438,11 +451,11 @@ export default function MfaSettingsPanel({
       <div className="space-y-4">
         {showCommunicationShortcuts && (isEmailPolicyLoading ? null : (
           <div className="settings-card settings-email-automation-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
-            <p className="text-sm font-semibold text-[var(--foreground)]">Email and daily briefing</p>
+            <p className="text-sm font-semibold text-[var(--foreground)]">Email & communication</p>
             <p className="mt-1 text-sm text-[var(--muted)]">
               {isEmailAutomationEnabled
-                ? "Manage mailbox connection, email automation, and daily briefing delivery."
-                : "Open mailbox and daily briefing pages. Some features may be disabled by company policy."}
+                ? "Manage mailbox connection, email automation, and daily email briefing delivery."
+                : "Open mailbox and daily email briefing pages. Some features may be disabled by company policy."}
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <Link
@@ -455,7 +468,7 @@ export default function MfaSettingsPanel({
                 href="#daily-briefing-settings-inline"
                 className="settings-email-automation-link rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
               >
-                Daily briefing settings
+                Daily email briefing
               </Link>
               {currentRole === "super_admin" || currentRole === "owner" ? (
                 <Link
@@ -482,7 +495,7 @@ export default function MfaSettingsPanel({
             <input type="text" value={lastName} onChange={(event) => setLastName(event.target.value)} required placeholder="Last name" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-2.5 text-sm outline-none focus:border-[var(--accent)]" />
             <input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Phone" className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-2.5 text-sm outline-none focus:border-[var(--accent)] md:col-span-2" />
             {profileMessage ? <p className="text-sm font-medium text-red-500">{profileMessage}</p> : null}
-            <button type="submit" disabled={isSaving} className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70 md:justify-self-start">Save profile</button>
+            <button type="submit" disabled={isSaving} className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70 md:justify-self-start">Save changes</button>
           </div>
         </form>
 

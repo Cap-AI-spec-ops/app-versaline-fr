@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import DateTimePickerInput from "@/components/ui/date-time-picker-input";
 import { useWorkspaceAbsences, type WorkspaceAbsence } from "@/lib/calendar/use-workspace-absences";
@@ -32,6 +32,7 @@ type PersonalCalendarResponse = {
 };
 
 type CalendarViewMode = "month" | "week" | "day";
+type CalendarLayerFilter = "all" | "personal" | "team";
 
 type PersonalEventForm = {
   title: string;
@@ -135,10 +136,6 @@ function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
-function endOfMonth(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0);
-}
-
 function startOfCalendarGrid(date: Date) {
   const monthStart = startOfMonth(date);
   const shift = getMondayBasedDayIndex(monthStart);
@@ -214,7 +211,15 @@ function formatProviderStatus(status: string) {
     return "calendar unavailable";
   }
 
+  if (status === "reconnect_required") {
+    return "reconnect required";
+  }
+
   return status.replace(/_/g, " ");
+}
+
+function sanitizeCalendarMessage(message: string) {
+  return message.replace(/\b(gmail|google|outlook)\b/gi, "calendar account");
 }
 
 function formatDateRange(startsOn: string, endsOn: string) {
@@ -266,6 +271,7 @@ function buildPersonalEventForm(selectedDateKey: string): PersonalEventForm {
 export default function CalendarPanel() {
   const [activeMonth, setActiveMonth] = useState(() => startOfMonth(new Date()));
   const [viewMode, setViewMode] = useState<CalendarViewMode>("month");
+  const [layerFilter, setLayerFilter] = useState<CalendarLayerFilter>("all");
   const [selectedDateKey, setSelectedDateKey] = useState(() => toIsoDate(new Date()));
   const [providers, setProviders] = useState<PersonalProviderState[]>([]);
   const [personalEvents, setPersonalEvents] = useState<PersonalCalendarEvent[]>([]);
@@ -319,9 +325,10 @@ export default function CalendarPanel() {
   const [editingAbsenceId, setEditingAbsenceId] = useState<string | null>(null);
   const [formMessage, setFormMessage] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [isPersonalEventCardOpen, setIsPersonalEventCardOpen] = useState(false);
-  const [isAbsenceCardOpen, setIsAbsenceCardOpen] = useState(false);
-  const [isDayDetailsOpen, setIsDayDetailsOpen] = useState(false);
+  const [isPersonalEventCardOpen, setIsPersonalEventCardOpen] = useState(true);
+  const [isAbsenceCardOpen, setIsAbsenceCardOpen] = useState(true);
+  const personalComposerRef = useRef<HTMLDivElement | null>(null);
+  const absenceComposerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!form.profileId && currentUserId) {
@@ -357,7 +364,7 @@ export default function CalendarPanel() {
         }
 
         const message = error instanceof Error ? error.message : "Could not load personal calendar.";
-        setPersonalError(message);
+        setPersonalError(sanitizeCalendarMessage(message));
         setProviders([]);
         setPersonalEvents([]);
       } finally {
@@ -458,6 +465,12 @@ export default function CalendarPanel() {
   const selectedDayPersonalEvents = personalEventsByDay.get(selectedDateKey) ?? [];
   const connectedProviders = providers.filter((provider) => provider.connected);
   const visibleProviders = connectedProviders.length > 0 ? connectedProviders : providers;
+  const providerIssues = visibleProviders.filter(
+    (provider) => !provider.connected || provider.status === "connected_unavailable" || provider.status === "reconnect_required",
+  );
+  const hasConnectionIssue = providerIssues.length > 0;
+  const hasCalendarConnection = connectedProviders.length > 0;
+
   const timelineDays = viewMode === "week" ? weekDays : [selectedDate];
 
   const timelineByDay = useMemo(() => {
@@ -537,6 +550,17 @@ export default function CalendarPanel() {
     return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(activeMonth);
   }, [activeMonth, selectedDate, viewMode, weekStartDate]);
 
+  const selectedDateLabel = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-GB", {
+        weekday: "long",
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }).format(selectedDate),
+    [selectedDate],
+  );
+
   const previousLabel = viewMode === "month" ? "Prev month" : viewMode === "week" ? "Prev week" : "Prev day";
   const currentLabel = viewMode === "month" ? "This month" : viewMode === "week" ? "This week" : "Today";
   const nextLabel = viewMode === "month" ? "Next month" : viewMode === "week" ? "Next week" : "Next day";
@@ -575,7 +599,16 @@ export default function CalendarPanel() {
     const dayKey = toDayKey(day);
     setSelectedDateKey(dayKey);
     setActiveMonth(startOfMonth(day));
-    setIsDayDetailsOpen(true);
+  };
+
+  const focusPersonalComposer = () => {
+    setIsPersonalEventCardOpen(true);
+    personalComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const focusAbsenceComposer = () => {
+    setIsAbsenceCardOpen(true);
+    absenceComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   useEffect(() => {
@@ -593,7 +626,7 @@ export default function CalendarPanel() {
     const title = personalEventForm.title.trim();
 
     if (!provider) {
-      setPersonalFormError("Connect a calendar provider.");
+      setPersonalFormError("Connect a calendar account in settings first.");
       return;
     }
 
@@ -652,7 +685,7 @@ export default function CalendarPanel() {
       await loadPersonalCalendar();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not create personal event.";
-      setPersonalFormError(message);
+      setPersonalFormError(sanitizeCalendarMessage(message));
     } finally {
       setIsPersonalMutating(false);
     }
@@ -691,7 +724,7 @@ export default function CalendarPanel() {
       await loadPersonalCalendar();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not delete personal event.";
-      setPersonalFormError(message);
+      setPersonalFormError(sanitizeCalendarMessage(message));
     } finally {
       setIsPersonalMutating(false);
     }
@@ -752,6 +785,7 @@ export default function CalendarPanel() {
     });
     setFormMessage(null);
     setFormError(null);
+    focusAbsenceComposer();
   };
 
   const handleDelete = async (absence: WorkspaceAbsence) => {
@@ -778,255 +812,280 @@ export default function CalendarPanel() {
     }
   };
 
+  const selectedPersonalEventsVisible = layerFilter === "team" ? [] : selectedDayPersonalEvents;
+  const selectedAbsencesVisible = layerFilter === "personal" ? [] : selectedDayAbsences;
+
   return (
     <section className="flex min-h-full flex-col gap-6 pb-6">
       <article className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-6 py-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">Unified calendar</p>
-            <h2 className="mt-2 text-3xl font-semibold tracking-tight text-[var(--foreground)]">Personal and workspace timeline</h2>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">Calendar workspace</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-tight text-[var(--foreground)]">Plan your day and team availability</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-              Personal events are read from your linked mailbox calendar providers. Workspace absences are manually managed here so coworkers can rebalance workload when someone is out.
+              Your personal events appear in the shared timeline. Team absences are managed here so everyone can rebalance workload quickly.
             </p>
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
-          {visibleProviders.map((provider) => {
-            const needsReconnect = !provider.connected;
-            const isTemporarilyUnavailable = provider.status === "connected_unavailable";
-            const badgeClass = `rounded-full border px-2.5 py-1 font-semibold uppercase tracking-[0.1em] ${
-              provider.connected && !isTemporarilyUnavailable
-                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                : "border-amber-300 bg-amber-50 text-amber-700"
-            }`;
-
-            if (needsReconnect || isTemporarilyUnavailable) {
-              return (
-                <Link
-                  key={provider.provider}
-                  href="/settings/mailbox"
-                  className={`${badgeClass} transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300`}
-                >
-                  {provider.provider} {formatProviderStatus(provider.status)} - open email settings
-                </Link>
-              );
-            }
-
-            return (
-              <span key={provider.provider} className={badgeClass}>
-                {provider.provider} {formatProviderStatus(provider.status)}
-              </span>
-            );
-          })}
-          {!providers.length && isPersonalLoading ? (
-            <span className="rounded-full border border-[var(--border)] bg-white px-2.5 py-1 font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">
-              Loading providers
-            </span>
-          ) : null}
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <div className="rounded-2xl border border-[var(--border)] bg-white/70 px-3 py-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">1. View schedule</p>
+            <p className="mt-1 text-sm text-[var(--foreground)]">Use Month, Week, or Day and click a date cell.</p>
+          </div>
+          <div className="rounded-2xl border border-[var(--border)] bg-white/70 px-3 py-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">2. Add personal event</p>
+            <p className="mt-1 text-sm text-[var(--foreground)]">Use the left action panel to create your next event.</p>
+          </div>
+          <div className="rounded-2xl border border-[var(--border)] bg-white/70 px-3 py-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">3. Manage absences</p>
+            <p className="mt-1 text-sm text-[var(--foreground)]">Track team availability from the same timeline.</p>
+          </div>
         </div>
+
+        {hasConnectionIssue ? (
+          <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
+            <Link
+              href="/settings/mailbox"
+              className="rounded-full border border-red-400 bg-red-500 px-3 py-1 font-semibold uppercase tracking-[0.1em] text-white transition hover:bg-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+            >
+              Fix calendar connection
+            </Link>
+            <span className="rounded-full border border-red-300 bg-red-50 px-3 py-1 font-semibold uppercase tracking-[0.08em] text-red-700">
+              Some calendar data may be missing
+            </span>
+          </div>
+        ) : null}
 
         {personalError ? <p className="mt-3 text-sm text-red-500">{personalError}</p> : null}
       </article>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <article className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <h3 className="text-lg font-semibold text-[var(--foreground)]">Add personal event</h3>
-            <button
-              type="button"
-              onClick={() => setIsPersonalEventCardOpen((open) => !open)}
-              className="admin-disclosure-hint"
-              aria-expanded={isPersonalEventCardOpen}
-            >
-              {isPersonalEventCardOpen ? "Hide" : "Open"}
-            </button>
-          </div>
+      <div className="grid gap-6 xl:grid-cols-[minmax(270px,0.95fr)_minmax(0,1.65fr)_minmax(280px,1fr)]">
+        <aside className="space-y-6">
+          <article ref={personalComposerRef} className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <h3 className="text-lg font-semibold text-[var(--foreground)]">Add personal event</h3>
+              <button
+                type="button"
+                onClick={() => setIsPersonalEventCardOpen((open) => !open)}
+                className="admin-disclosure-hint"
+                aria-expanded={isPersonalEventCardOpen}
+              >
+                {isPersonalEventCardOpen ? "Hide" : "Open"}
+              </button>
+            </div>
 
-          {isPersonalEventCardOpen ? (
-            <form onSubmit={handleCreatePersonalEvent} className="mt-4 grid gap-3 md:grid-cols-2">
-              <label className="flex items-end gap-2 pb-2 text-sm text-[var(--muted)]">
-                <input
-                  type="checkbox"
-                  checked={personalEventForm.isAllDay}
-                  onChange={(event) => setPersonalEventForm((current) => ({ ...current, isAllDay: event.target.checked }))}
-                  className="h-4 w-4 rounded border-[var(--border)]"
-                />
-                All day
-              </label>
+            <p className="mt-2 text-sm text-[var(--muted)]">Use this form to add events directly from this page.</p>
 
-              <label className="space-y-1 text-sm text-[var(--muted)] md:col-span-2">
-                Title
-                <input
-                  type="text"
-                  value={personalEventForm.title}
-                  onChange={(event) => setPersonalEventForm((current) => ({ ...current, title: event.target.value }))}
-                  placeholder="Client call, dentist, focused work..."
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                />
-              </label>
+            {isPersonalEventCardOpen ? (
+              <form onSubmit={handleCreatePersonalEvent} className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="flex items-end gap-2 pb-2 text-sm text-[var(--muted)]">
+                  <input
+                    type="checkbox"
+                    checked={personalEventForm.isAllDay}
+                    onChange={(nextEvent) =>
+                      setPersonalEventForm((current) => ({ ...current, isAllDay: nextEvent.target.checked }))
+                    }
+                    className="h-4 w-4 rounded border-[var(--border)]"
+                  />
+                  All day
+                </label>
 
-              {personalEventForm.isAllDay ? (
-                <p className="md:col-span-2 rounded-xl border border-dashed border-[var(--border)] bg-white/70 px-3 py-2 text-sm text-[var(--muted)]">
-                  This all-day event will be created on {selectedDateKey}.
-                </p>
-              ) : (
-                <>
-                  <label className="space-y-1 text-sm text-[var(--muted)]">
-                    Start
-                    <DateTimePickerInput
-                      mode="datetime"
-                      value={personalEventForm.startsAt}
-                      onChange={(nextValue) =>
-                        setPersonalEventForm((current) => ({
-                          ...current,
-                          startsAt: nextValue,
-                          endsAt: addOneHourToLocalIsoDateTime(nextValue),
-                        }))
-                      }
-                      className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                    />
-                  </label>
+                <label className="space-y-1 text-sm text-[var(--muted)] md:col-span-2">
+                  Title
+                  <input
+                    type="text"
+                    value={personalEventForm.title}
+                    onChange={(nextEvent) => setPersonalEventForm((current) => ({ ...current, title: nextEvent.target.value }))}
+                    placeholder="Client call, site visit, focused work..."
+                    className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                  />
+                </label>
 
-                  <label className="space-y-1 text-sm text-[var(--muted)]">
-                    End
-                    <DateTimePickerInput
-                      mode="datetime"
-                      value={personalEventForm.endsAt}
-                      onChange={(nextValue) => setPersonalEventForm((current) => ({ ...current, endsAt: nextValue }))}
-                      className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                    />
-                  </label>
-                </>
-              )}
+                {personalEventForm.isAllDay ? (
+                  <p className="md:col-span-2 rounded-xl border border-dashed border-[var(--border)] bg-white/70 px-3 py-2 text-sm text-[var(--muted)]">
+                    This all-day event will be created on {selectedDateKey}.
+                  </p>
+                ) : (
+                  <>
+                    <label className="space-y-1 text-sm text-[var(--muted)]">
+                      Start
+                      <DateTimePickerInput
+                        mode="datetime"
+                        value={personalEventForm.startsAt}
+                        onChange={(nextValue) =>
+                          setPersonalEventForm((current) => ({
+                            ...current,
+                            startsAt: nextValue,
+                            endsAt: addOneHourToLocalIsoDateTime(nextValue),
+                          }))
+                        }
+                        className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                      />
+                    </label>
 
-              <label className="space-y-1 text-sm text-[var(--muted)] md:col-span-2">
-                Location (optional)
-                <input
-                  type="text"
-                  value={personalEventForm.location}
-                  onChange={(event) => setPersonalEventForm((current) => ({ ...current, location: event.target.value }))}
-                  placeholder="Address or meeting room"
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                />
-              </label>
+                    <label className="space-y-1 text-sm text-[var(--muted)]">
+                      End
+                      <DateTimePickerInput
+                        mode="datetime"
+                        value={personalEventForm.endsAt}
+                        onChange={(nextValue) => setPersonalEventForm((current) => ({ ...current, endsAt: nextValue }))}
+                        className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                      />
+                    </label>
+                  </>
+                )}
 
-              {connectedProviders.length === 0 ? (
-                <p className="md:col-span-2 text-sm text-amber-700">Connect Google or Outlook in email settings to create personal events.</p>
-              ) : null}
-              {personalFormError ? <p className="md:col-span-2 text-sm text-red-500">{personalFormError}</p> : null}
-              {personalFormMessage ? <p className="md:col-span-2 text-sm text-emerald-600">{personalFormMessage}</p> : null}
+                <label className="space-y-1 text-sm text-[var(--muted)] md:col-span-2">
+                  Location (optional)
+                  <input
+                    type="text"
+                    value={personalEventForm.location}
+                    onChange={(nextEvent) =>
+                      setPersonalEventForm((current) => ({ ...current, location: nextEvent.target.value }))
+                    }
+                    placeholder="Address or meeting room"
+                    className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                  />
+                </label>
 
-              <div className="md:col-span-2 flex flex-wrap gap-2">
-                <button
-                  type="submit"
-                  disabled={isPersonalMutating || connectedProviders.length === 0}
-                  className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {isPersonalMutating ? "Saving..." : "Create personal event"}
-                </button>
-              </div>
-            </form>
-          ) : null}
-        </article>
-
-        <article className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <h3 className="text-lg font-semibold text-[var(--foreground)]">Add workspace absence</h3>
-            <button
-              type="button"
-              onClick={() => setIsAbsenceCardOpen((open) => !open)}
-              className="admin-disclosure-hint"
-              aria-expanded={isAbsenceCardOpen}
-            >
-              {isAbsenceCardOpen ? "Hide" : "Open"}
-            </button>
-          </div>
-
-          {isAbsenceCardOpen ? (
-            <form onSubmit={handleSubmit} className="mt-4 grid gap-3 md:grid-cols-2">
-              <label className="space-y-1 text-sm text-[var(--muted)]">
-                Coworker
-                <select
-                  value={form.profileId}
-                  onChange={(event) => setForm((current) => ({ ...current, profileId: event.target.value }))}
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                >
-                  <option value="">Select member</option>
-                  {members.map((member) => (
-                    <option key={member.profile_id} value={member.profile_id}>
-                      {formatMemberName(member.first_name, member.last_name)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="space-y-1 text-sm text-[var(--muted)]">
-                Start date
-                <DateTimePickerInput
-                  mode="date"
-                  value={form.startsOn}
-                  onChange={(nextValue) => setForm((current) => ({ ...current, startsOn: nextValue }))}
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                />
-              </label>
-
-              <label className="space-y-1 text-sm text-[var(--muted)]">
-                End date
-                <DateTimePickerInput
-                  mode="date"
-                  value={form.endsOn}
-                  onChange={(nextValue) => setForm((current) => ({ ...current, endsOn: nextValue }))}
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                />
-              </label>
-
-              <label className="space-y-1 text-sm text-[var(--muted)] md:col-span-2">
-                Public note (optional)
-                <input
-                  type="text"
-                  maxLength={240}
-                  value={form.publicNote}
-                  onChange={(event) => setForm((current) => ({ ...current, publicNote: event.target.value }))}
-                  placeholder="Optional short context visible to workspace members"
-                  className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
-                />
-              </label>
-
-              {absenceError ? <p className="md:col-span-2 text-sm text-red-500">{absenceError}</p> : null}
-              {formError ? <p className="md:col-span-2 text-sm text-red-500">{formError}</p> : null}
-              {formMessage ? <p className="md:col-span-2 text-sm text-emerald-600">{formMessage}</p> : null}
-
-              <div className="md:col-span-2 flex flex-wrap gap-2">
-                <button
-                  type="submit"
-                  disabled={isMutating}
-                  className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {editingAbsenceId ? "Save changes" : "Create absence"}
-                </button>
-
-                {editingAbsenceId ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingAbsenceId(null);
-                      setForm(buildAbsenceForm(currentUserId));
-                      setFormMessage(null);
-                      setFormError(null);
-                    }}
-                    className="rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
-                  >
-                    Cancel edit
-                  </button>
+                {connectedProviders.length === 0 ? (
+                  <p className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    Connect a calendar account in mailbox settings to create personal events.
+                  </p>
                 ) : null}
-              </div>
-            </form>
-          ) : null}
-        </article>
-      </div>
+                {personalFormError ? <p className="md:col-span-2 text-sm text-red-500">{personalFormError}</p> : null}
+                {personalFormMessage ? <p className="md:col-span-2 text-sm text-emerald-600">{personalFormMessage}</p> : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+                <div className="md:col-span-2 flex flex-wrap gap-2">
+                  <button
+                    type="submit"
+                    disabled={isPersonalMutating || connectedProviders.length === 0}
+                    className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {isPersonalMutating ? "Saving..." : "Create personal event"}
+                  </button>
+                </div>
+              </form>
+            ) : null}
+          </article>
+
+          <article ref={absenceComposerRef} className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <h3 className="text-lg font-semibold text-[var(--foreground)]">Add workspace absence</h3>
+              <button
+                type="button"
+                onClick={() => setIsAbsenceCardOpen((open) => !open)}
+                className="admin-disclosure-hint"
+                aria-expanded={isAbsenceCardOpen}
+              >
+                {isAbsenceCardOpen ? "Hide" : "Open"}
+              </button>
+            </div>
+
+            <p className="mt-2 text-sm text-[var(--muted)]">Record days off so teammates can plan workload and meetings.</p>
+
+            {isAbsenceCardOpen ? (
+              <form onSubmit={handleSubmit} className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="space-y-1 text-sm text-[var(--muted)]">
+                  Coworker
+                  <select
+                    value={form.profileId}
+                    onChange={(nextEvent) => setForm((current) => ({ ...current, profileId: nextEvent.target.value }))}
+                    className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                  >
+                    <option value="">Select member</option>
+                    {members.map((member) => (
+                      <option key={member.profile_id} value={member.profile_id}>
+                        {formatMemberName(member.first_name, member.last_name)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-1 text-sm text-[var(--muted)]">
+                  Start date
+                  <DateTimePickerInput
+                    mode="date"
+                    value={form.startsOn}
+                    onChange={(nextValue) => setForm((current) => ({ ...current, startsOn: nextValue }))}
+                    className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                  />
+                </label>
+
+                <label className="space-y-1 text-sm text-[var(--muted)]">
+                  End date
+                  <DateTimePickerInput
+                    mode="date"
+                    value={form.endsOn}
+                    onChange={(nextValue) => setForm((current) => ({ ...current, endsOn: nextValue }))}
+                    className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                  />
+                </label>
+
+                <label className="space-y-1 text-sm text-[var(--muted)] md:col-span-2">
+                  Public note (optional)
+                  <input
+                    type="text"
+                    maxLength={240}
+                    value={form.publicNote}
+                    onChange={(nextEvent) => setForm((current) => ({ ...current, publicNote: nextEvent.target.value }))}
+                    placeholder="Optional short context visible to workspace members"
+                    className="w-full rounded-2xl border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--foreground)]"
+                  />
+                </label>
+
+                {absenceError ? <p className="md:col-span-2 text-sm text-red-500">{absenceError}</p> : null}
+                {formError ? <p className="md:col-span-2 text-sm text-red-500">{formError}</p> : null}
+                {formMessage ? <p className="md:col-span-2 text-sm text-emerald-600">{formMessage}</p> : null}
+
+                <div className="md:col-span-2 flex flex-wrap gap-2">
+                  <button
+                    type="submit"
+                    disabled={isMutating}
+                    className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {editingAbsenceId ? "Save changes" : "Create absence"}
+                  </button>
+
+                  {editingAbsenceId ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingAbsenceId(null);
+                        setForm(buildAbsenceForm(currentUserId));
+                        setFormMessage(null);
+                        setFormError(null);
+                      }}
+                      className="rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+                    >
+                      Cancel edit
+                    </button>
+                  ) : null}
+                </div>
+              </form>
+            ) : null}
+          </article>
+
+          <article className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Calendar connection</p>
+            <p className="mt-2 text-sm text-[var(--foreground)]">{hasCalendarConnection ? "Connected" : "Not connected"}</p>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              {hasCalendarConnection
+                ? "If some events are missing, open mailbox settings and refresh your connection."
+                : "Connect your calendar account in mailbox settings to sync personal events."}
+            </p>
+            <div className="mt-4">
+              <Link
+                href="/settings/mailbox"
+                className="inline-flex rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+              >
+                Open mailbox settings
+              </Link>
+            </div>
+          </article>
+        </aside>
+
         <article className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
@@ -1058,6 +1117,58 @@ export default function CalendarPanel() {
             {(isAbsenceLoading || isPersonalLoading) ? (
               <span className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted)]">Refreshing</span>
             ) : null}
+          </div>
+
+          <div className="mb-4 grid gap-3 rounded-2xl border border-[var(--border)] bg-white/60 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${
+                  hasConnectionIssue
+                    ? "border-amber-300 bg-amber-50 text-amber-800"
+                    : "border-emerald-300 bg-emerald-50 text-emerald-800"
+                }`}
+              >
+                {hasConnectionIssue ? "Connection needs attention" : "Connection healthy"}
+              </span>
+              {providerIssues.slice(0, 2).map((provider) => (
+                <span
+                  key={`provider-state-${provider.provider}`}
+                  className="rounded-full border border-[var(--border)] bg-white px-2 py-1 text-[11px] text-[var(--muted)]"
+                >
+                  {formatProviderStatus(provider.status)}
+                </span>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-blue-300 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-800">
+                Personal events
+              </span>
+              <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800">
+                Team absences
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {([
+                { id: "all", label: "Show all" },
+                { id: "personal", label: "Personal only" },
+                { id: "team", label: "Team only" },
+              ] as const).map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setLayerFilter(option.id)}
+                  className={`rounded-xl border px-3 py-1.5 text-sm font-semibold transition ${
+                    layerFilter === option.id
+                      ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--foreground)]"
+                      : "border-[var(--border)] bg-white text-[var(--foreground)] hover:bg-slate-50"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="mb-4 flex flex-wrap gap-2">
@@ -1110,12 +1221,16 @@ export default function CalendarPanel() {
                   >
                     <p className="text-sm font-semibold text-[var(--foreground)]">{day.getDate()}</p>
                     <div className="mt-2 space-y-1">
-                      <p className={`text-[11px] font-medium ${isSelected ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
-                        Personal events: {dayPersonalCount}
-                      </p>
-                      <p className={`text-[11px] font-medium ${isSelected ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
-                        Absences: {dayAbsenceCount}
-                      </p>
+                      {layerFilter !== "team" ? (
+                        <p className={`text-[11px] font-medium ${isSelected ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
+                          Personal events: {dayPersonalCount}
+                        </p>
+                      ) : null}
+                      {layerFilter !== "personal" ? (
+                        <p className={`text-[11px] font-medium ${isSelected ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
+                          Team absences: {dayAbsenceCount}
+                        </p>
+                      ) : null}
                     </div>
                   </button>
                 );
@@ -1129,6 +1244,7 @@ export default function CalendarPanel() {
                   const dayKey = toDayKey(day);
                   const isSelected = dayKey === selectedDateKey;
                   const dayPersonalCount = (personalEventsByDay.get(dayKey) ?? []).length;
+                  const dayAbsenceCount = (absencesByDay.get(dayKey) ?? []).length;
 
                   return (
                     <button
@@ -1143,7 +1259,8 @@ export default function CalendarPanel() {
                       <p className="text-sm font-semibold text-[var(--foreground)]">
                         {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(day)}
                       </p>
-                      <p className="text-[11px] text-[var(--muted)]">Events: {dayPersonalCount}</p>
+                      {layerFilter !== "team" ? <p className="text-[11px] text-[var(--muted)]">Personal: {dayPersonalCount}</p> : null}
+                      {layerFilter !== "personal" ? <p className="text-[11px] text-[var(--muted)]">Absences: {dayAbsenceCount}</p> : null}
                     </button>
                   );
                 })}
@@ -1161,6 +1278,7 @@ export default function CalendarPanel() {
                 {timelineDays.map((day) => {
                   const dayKey = toDayKey(day);
                   const bucket = timelineByDay.get(dayKey) ?? { timed: [], allDay: [] };
+                  const dayAbsences = absencesByDay.get(dayKey) ?? [];
 
                   return (
                     <div key={`timeline-day-${dayKey}`} className="relative rounded-xl border border-[var(--border)] bg-white/90" style={{ height: `${HOUR_ROW_HEIGHT * HOURS_IN_DAY}px` }}>
@@ -1172,29 +1290,47 @@ export default function CalendarPanel() {
                         />
                       ))}
 
-                      {bucket.allDay.length ? (
+                      {(layerFilter !== "team" && bucket.allDay.length > 0) ||
+                      (layerFilter !== "personal" && dayAbsences.length > 0) ? (
                         <div className="absolute left-1 right-1 top-1 z-20 flex flex-wrap gap-1">
-                          {bucket.allDay.map((event) => (
-                            <span key={`all-day-${dayKey}-${event.provider}-${event.id}`} className="rounded-md bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800">
-                              {event.title}
-                            </span>
-                          ))}
+                          {layerFilter !== "team"
+                            ? bucket.allDay.map((event) => (
+                                <span
+                                  key={`all-day-${dayKey}-${event.provider}-${event.id}`}
+                                  className="rounded-md bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800"
+                                >
+                                  {event.title}
+                                </span>
+                              ))
+                            : null}
+                          {layerFilter !== "personal"
+                            ? dayAbsences.map((absence) => (
+                                <span
+                                  key={`absence-${dayKey}-${absence.id}`}
+                                  className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+                                >
+                                  {formatMemberName(absence.first_name, absence.last_name)} away
+                                </span>
+                              ))
+                            : null}
                         </div>
                       ) : null}
 
-                      {bucket.timed.map((item, index) => (
-                        <div
-                          key={`timed-${dayKey}-${item.event.provider}-${item.event.id}-${index}`}
-                          className="absolute left-1 right-1 z-10 overflow-hidden rounded-lg border border-blue-200 bg-blue-50 px-2 py-1"
-                          style={{ top: `${item.top}px`, height: `${item.height}px` }}
-                          title={`${item.event.title} (${item.event.provider})`}
-                        >
-                          <p className="truncate text-[11px] font-semibold text-blue-900">{item.event.title}</p>
-                          <p className="truncate text-[10px] text-blue-700">
-                            {formatTimeRange(new Date(item.event.startsAt), new Date(item.event.endsAt))}
-                          </p>
-                        </div>
-                      ))}
+                      {layerFilter !== "team"
+                        ? bucket.timed.map((item, index) => (
+                            <div
+                              key={`timed-${dayKey}-${item.event.provider}-${item.event.id}-${index}`}
+                              className="absolute left-1 right-1 z-10 overflow-hidden rounded-lg border border-blue-200 bg-blue-50 px-2 py-1"
+                              style={{ top: `${item.top}px`, height: `${item.height}px` }}
+                              title={item.event.title}
+                            >
+                              <p className="truncate text-[11px] font-semibold text-blue-900">{item.event.title}</p>
+                              <p className="truncate text-[10px] text-blue-700">
+                                {formatTimeRange(new Date(item.event.startsAt), new Date(item.event.endsAt))}
+                              </p>
+                            </div>
+                          ))
+                        : null}
                     </div>
                   );
                 })}
@@ -1204,13 +1340,28 @@ export default function CalendarPanel() {
         </article>
 
         <article className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-[var(--foreground)]">{selectedDateKey}</h3>
+          <h3 className="text-lg font-semibold text-[var(--foreground)]">Selected day</h3>
+          <p className="mt-1 text-sm text-[var(--muted)]">{selectedDateLabel}</p>
           <div className="mt-4 space-y-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Personal calendar</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Personal calendar</p>
+                <button
+                  type="button"
+                  onClick={focusPersonalComposer}
+                  className="rounded-lg border border-[var(--border)] bg-white px-2 py-1 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+                >
+                  Add event
+                </button>
+              </div>
+
               <div className="mt-2 space-y-2">
-                {selectedDayPersonalEvents.length ? (
-                  selectedDayPersonalEvents.map((event) => (
+                {layerFilter === "team" ? (
+                  <p className="rounded-xl border border-dashed border-[var(--border)] bg-white/70 px-3 py-2 text-sm text-[var(--muted)]">
+                    Personal events are hidden by the active filter.
+                  </p>
+                ) : selectedPersonalEventsVisible.length > 0 ? (
+                  selectedPersonalEventsVisible.map((event) => (
                     <div key={`${event.provider}:${event.id}`} className="rounded-xl border border-[var(--border)] bg-white px-3 py-2">
                       <div className="flex items-start justify-between gap-2">
                         <div>
@@ -1225,8 +1376,6 @@ export default function CalendarPanel() {
                                   hour: "2-digit",
                                   minute: "2-digit",
                                 }).format(new Date(event.endsAt))}`}
-                            {" | "}
-                            {event.provider}
                           </p>
                           {event.location ? <p className="mt-1 text-xs text-[var(--muted)]">{event.location}</p> : null}
                         </div>
@@ -1252,10 +1401,24 @@ export default function CalendarPanel() {
             </div>
 
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Workspace absences</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Workspace absences</p>
+                <button
+                  type="button"
+                  onClick={focusAbsenceComposer}
+                  className="rounded-lg border border-[var(--border)] bg-white px-2 py-1 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
+                >
+                  Add absence
+                </button>
+              </div>
+
               <div className="mt-2 space-y-2">
-                {selectedDayAbsences.length ? (
-                  selectedDayAbsences.map((absence) => (
+                {layerFilter === "personal" ? (
+                  <p className="rounded-xl border border-dashed border-[var(--border)] bg-white/70 px-3 py-2 text-sm text-[var(--muted)]">
+                    Team absences are hidden by the active filter.
+                  </p>
+                ) : selectedAbsencesVisible.length > 0 ? (
+                  selectedAbsencesVisible.map((absence) => (
                     <div key={absence.id} className="rounded-xl border border-[var(--border)] bg-white px-3 py-2">
                       <div className="flex items-start justify-between gap-2">
                         <div>
@@ -1301,106 +1464,6 @@ export default function CalendarPanel() {
           </div>
         </article>
       </div>
-
-      {isDayDetailsOpen ? (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/45 px-4 py-8"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Day details"
-          onClick={() => setIsDayDetailsOpen(false)}
-        >
-          <div
-            className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold text-[var(--foreground)]">{selectedDateKey}</h3>
-              <button
-                type="button"
-                onClick={() => setIsDayDetailsOpen(false)}
-                className="rounded-lg border border-[var(--border)] bg-white px-3 py-1.5 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Personal calendar</p>
-                <div className="mt-2 space-y-2">
-                  {selectedDayPersonalEvents.length ? (
-                    selectedDayPersonalEvents.map((event) => (
-                      <div key={`modal-${event.provider}:${event.id}`} className="rounded-xl border border-[var(--border)] bg-white px-3 py-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold text-[var(--foreground)]">{event.title}</p>
-                            <p className="mt-1 text-xs text-[var(--muted)]">
-                              {event.isAllDay
-                                ? "All day"
-                                : `${new Intl.DateTimeFormat("en-GB", {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  }).format(new Date(event.startsAt))} - ${new Intl.DateTimeFormat("en-GB", {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  }).format(new Date(event.endsAt))}`}
-                              {" | "}
-                              {event.provider}
-                            </p>
-                            {event.location ? <p className="mt-1 text-xs text-[var(--muted)]">{event.location}</p> : null}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleDeletePersonalEvent(event);
-                            }}
-                            disabled={isPersonalMutating}
-                            className="rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-70"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="rounded-xl border border-dashed border-[var(--border)] bg-white/70 px-3 py-2 text-sm text-[var(--muted)]">
-                      No personal events on this day.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">Workspace absences</p>
-                <div className="mt-2 space-y-2">
-                  {selectedDayAbsences.length ? (
-                    selectedDayAbsences.map((absence) => (
-                      <div key={`modal-${absence.id}`} className="rounded-xl border border-[var(--border)] bg-white px-3 py-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold text-[var(--foreground)]">
-                              {formatMemberName(absence.first_name, absence.last_name)}
-                            </p>
-                            <p className="mt-1 text-xs text-[var(--muted)]">{formatDateRange(absence.starts_on, absence.ends_on)}</p>
-                            <p className="mt-1 text-xs text-[var(--muted)]">{formatStatusLabel(absence.status)}</p>
-                            {absence.public_note ? <p className="mt-1 text-xs text-[var(--muted)]">{absence.public_note}</p> : null}
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="rounded-xl border border-dashed border-[var(--border)] bg-white/70 px-3 py-2 text-sm text-[var(--muted)]">
-                      No coworker absences on this day.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
     </section>
   );
 }

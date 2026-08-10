@@ -125,6 +125,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isTestSending, setIsTestSending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [lastSuccessAction, setLastSuccessAction] = useState<"save" | "preview" | "test-send" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [isPolicyLoading, setIsPolicyLoading] = useState(true);
@@ -149,6 +150,16 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
       : dailyBriefingPolicy.enabled;
 
   const controlsDisabled = !effectiveWorkspaceBriefingEnabled;
+  const currentBriefingState = !effectiveWorkspaceBriefingEnabled
+    ? "Disabled by workspace policy."
+    : prefs.isEnabled
+      ? "Automation enabled for your account."
+      : "Automation not enabled yet for your account.";
+  const briefingNextAction = !effectiveWorkspaceBriefingEnabled
+    ? "Ask an admin to enable daily briefing for this workspace."
+    : prefs.isEnabled
+      ? "Run Preview briefing or Send test email to validate your setup."
+      : "Enable daily briefing automation, choose schedule, then save.";
 
   useEffect(() => {
     if (!workspace?.id || !supabase) {
@@ -275,6 +286,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
 
     setIsSaving(true);
     setMessage(null);
+    setLastSuccessAction(null);
     setError(null);
 
     const payload = {
@@ -301,7 +313,8 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
       return;
     }
 
-    setMessage("Daily briefing preferences saved.");
+    setMessage("Daily email briefing settings saved.");
+    setLastSuccessAction("save");
   }
 
   async function updateTeamLeadWorkspaceScope(nextEnabled: boolean) {
@@ -347,6 +360,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
   async function runPreview() {
     setIsPreviewLoading(true);
     setMessage(null);
+    setLastSuccessAction(null);
     setError(null);
 
     try {
@@ -377,6 +391,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
 
       setPreview(payload as unknown as PreviewPayload);
       setMessage("Preview generated.");
+      setLastSuccessAction("preview");
     } catch (previewError) {
       setError(withSessionReloadFallback(previewError instanceof Error ? previewError.message : null, "Could not build preview."));
     } finally {
@@ -387,6 +402,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
   async function runTestSend() {
     setIsTestSending(true);
     setMessage(null);
+    setLastSuccessAction(null);
     setError(null);
 
     try {
@@ -416,6 +432,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
       }
 
       setMessage("Test briefing email sent to your account inbox.");
+      setLastSuccessAction("test-send");
     } catch (sendError) {
       setError(withSessionReloadFallback(sendError instanceof Error ? sendError.message : null, "Could not send test email."));
     } finally {
@@ -444,31 +461,41 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
   }
 
   if (isWorkspaceLoading || isLoading || isPolicyLoading) {
-    return <p className="text-sm text-[var(--muted)]">Loading daily briefing settings...</p>;
+    return <p className="text-sm text-[var(--muted)]">Loading daily email briefing settings...</p>;
   }
 
   return (
     <section className={surfaceClassName}>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">Daily Briefing</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">Daily Email Briefing</p>
         {embedded ? (
           <>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Daily briefing preferences</h2>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Daily email briefing</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              Choose when your daily briefing is generated and delivered, then test it before turning it on.
+              Choose when your daily email briefing is generated and delivered, then test it before turning it on.
             </p>
           </>
         ) : (
           <>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Daily briefing preferences</h1>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Daily email briefing</h1>
             <p className="mt-4 text-base leading-7 text-[var(--muted)]">
-              Choose when your AI daily briefing is created and delivered, and preview content before automation runs.
+              Choose when your AI daily email briefing is created and delivered, and preview content before automation runs.
             </p>
           </>
         )}
       </div>
 
       <form onSubmit={savePreferences} className="settings-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
+        <div className="rounded-2xl border border-[var(--border)] bg-white px-4 py-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Communication - Step 2</p>
+          <h3 className="mt-2 text-lg font-semibold text-[var(--foreground)]">Configure briefing delivery</h3>
+          <div className="mt-2 space-y-2 text-sm">
+            <p className="text-[var(--foreground)]"><span className="font-semibold">Current state:</span> {currentBriefingState}</p>
+            <p className="text-[var(--foreground)]"><span className="font-semibold">Why it matters:</span> A reliable briefing schedule keeps your team aligned on urgent follow-ups before the day starts.</p>
+            <p className="text-[var(--foreground)]"><span className="font-semibold">Next action:</span> {briefingNextAction}</p>
+          </div>
+        </div>
+
         <p className="text-sm font-semibold text-[var(--foreground)]">Schedule and delivery</p>
         <p className="mt-1 text-sm text-[var(--muted)]">These preferences are scoped to your user account in the current workspace.</p>
 
@@ -620,6 +647,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
                   ))}
                 </select>
               </div>
+              <p className="mt-1 text-xs text-[var(--muted)] settings-helper">Select when your briefing should be generated in your local timezone.</p>
             </label>
 
             <label className="text-sm text-[var(--foreground)]">
@@ -636,6 +664,7 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-xs text-[var(--muted)] settings-helper">Used to interpret the send time above for this workspace context.</p>
             </label>
           </div>
 
@@ -654,71 +683,60 @@ export default function DailyBriefingSettingsPanel({ embedded = false }: { embed
                   </option>
                 ))}
               </select>
-            </label>
-
-            <label className="text-sm text-[var(--foreground)]">
-              <span className="mb-1 block font-medium">Locale</span>
-              <select
-                value={prefs.locale}
-                onChange={(event) => setPrefs((previous) => ({ ...previous, locale: event.target.value }))}
-                disabled={controlsDisabled}
-                className="settings-field w-full rounded-2xl border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
-              >
-                {MARKET_LOCALE_OPTIONS.map((option) => (
-                  <option key={option.code} value={option.code}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              <p className="mt-1 text-xs text-[var(--muted)] settings-helper">Controls the language used in generated briefing content.</p>
             </label>
           </div>
 
           {error ? <p className="text-sm font-medium text-red-600">{error}</p> : null}
           {message ? <p className="text-sm font-medium text-emerald-700">{message}</p> : null}
 
-          <button
-            type="submit"
-            disabled={isSaving || controlsDisabled}
-            className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isSaving ? "Saving..." : "Save preferences"}
-          </button>
+          <div className="flex flex-wrap gap-3">
+            <div className="space-y-1">
+              <button
+                type="submit"
+                disabled={isSaving || controlsDisabled}
+                className="rounded-2xl bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-strong)_100%)] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-[rgba(59,130,246,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSaving ? "Saving..." : "Save changes"}
+              </button>
+              {lastSuccessAction === "save" ? <p className="text-xs font-medium text-emerald-700">Saved successfully.</p> : null}
+            </div>
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => void runPreview()}
+                disabled={isPreviewLoading || controlsDisabled}
+                className="rounded-2xl bg-[linear-gradient(135deg,#16a34a_0%,#15803d_100%)] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-[rgba(22,163,74,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isPreviewLoading ? "Running test..." : "Test"}
+              </button>
+              {lastSuccessAction === "preview" ? <p className="text-xs font-medium text-emerald-700">Preview is ready.</p> : null}
+            </div>
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => void runTestSend()}
+                disabled={isTestSending || controlsDisabled}
+                className="rounded-2xl bg-[linear-gradient(135deg,#16a34a_0%,#15803d_100%)] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-[rgba(22,163,74,0.24)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isTestSending ? "Sending test..." : "Test email"}
+              </button>
+              {lastSuccessAction === "test-send" ? <p className="text-xs font-medium text-emerald-700">Test email sent.</p> : null}
+            </div>
+          </div>
         </div>
       </form>
 
-      <div className="settings-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
-        <p className="text-sm font-semibold text-[var(--foreground)]">Validation tools</p>
-        <p className="mt-1 text-sm text-[var(--muted)]">Preview your daily briefing or send a test email to yourself.</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void runPreview()}
-            disabled={isPreviewLoading || controlsDisabled}
-            className="rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isPreviewLoading ? "Generating preview..." : "Preview briefing"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void runTestSend()}
-            disabled={isTestSending || controlsDisabled}
-            className="rounded-2xl border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isTestSending ? "Sending test..." : "Send test email"}
-          </button>
+      {preview ? (
+        <div className="settings-card rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">Latest preview</p>
+          <p className="mt-2 text-sm font-semibold text-[var(--foreground)]">{preview.aiBriefing?.headline ?? "No headline"}</p>
+          <p className="mt-2 whitespace-pre-line text-sm leading-6 text-[var(--muted)]">{preview.aiBriefing?.briefing ?? "No briefing text"}</p>
+          <p className="mt-3 text-xs text-[var(--muted)]">
+            Local day {preview.localDate ?? "n/a"} - {preview.timezone ?? "n/a"} - language {preview.language ?? "n/a"}
+          </p>
         </div>
-
-        {preview ? (
-          <div className="mt-4 rounded-2xl border border-[var(--border)] bg-white p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">Latest preview</p>
-            <p className="mt-2 text-sm font-semibold text-[var(--foreground)]">{preview.aiBriefing?.headline ?? "No headline"}</p>
-            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-[var(--muted)]">{preview.aiBriefing?.briefing ?? "No briefing text"}</p>
-            <p className="mt-3 text-xs text-[var(--muted)]">
-              Local day {preview.localDate ?? "n/a"} - {preview.timezone ?? "n/a"} - language {preview.language ?? "n/a"}
-            </p>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
     </section>
   );
 }

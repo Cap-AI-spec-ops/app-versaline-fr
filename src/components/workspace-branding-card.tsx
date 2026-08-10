@@ -445,7 +445,7 @@ function FieldStatusBadge(props: { text: "Mandatory by law" | "Required if holdi
   const className = props.text === "Mandatory by law"
     ? "border border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-700/80 dark:bg-rose-900/45 dark:text-rose-100"
     : props.text === "Required if holding funds"
-      ? "border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700/80 dark:bg-amber-900/45 dark:text-amber-100"
+      ? "border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700/80 dark:bg-emerald-900/45 dark:text-emerald-100"
       : "border border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-600/80 dark:bg-slate-700/55 dark:text-slate-100";
 
   return <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${className}`}>{props.text}</span>;
