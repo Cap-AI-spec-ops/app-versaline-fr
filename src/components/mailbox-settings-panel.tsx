@@ -794,13 +794,13 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
   ).length;
   const currentMailboxState =
     connectedProviders.length === 0
-      ? "No mailbox connected yet."
+      ? "No inbox or calendar connected yet."
       : reconnectRequiredCount > 0
-        ? "Mailbox connected but reconnect is required."
-        : "Mailbox connected and syncing is available.";
+        ? "Inbox and calendar connected, but reconnect is required."
+        : "Inbox and calendar connected with syncing available.";
   const mailboxNextAction =
     connectedProviders.length === 0
-      ? "Connect Gmail or Outlook, then run Sync now."
+      ? "Connect Gmail or Outlook for inbox and calendar, then run Sync now."
       : reconnectRequiredCount > 0
         ? "Use Reconnect now on your provider, then run Sync now."
         : "Review summary preferences and save them for your workflow.";
@@ -844,14 +844,14 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--muted)]">Mailbox</p>
         {embedded ? (
           <>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Inbox connections</h2>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[var(--foreground)]">Inbox / calendar settings</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
               Connect your mailbox provider so summaries, calendar sync, and email automation work reliably.
             </p>
           </>
         ) : (
           <>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Inbox connections</h1>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-[var(--foreground)]">Inbox / calendar settings</h1>
             <p className="mt-4 text-base leading-7 text-[var(--muted)]">
               Connect your mailbox providers so Versaline can triage and summarize client emails into CRM timelines.
             </p>
@@ -869,10 +869,10 @@ export default function MailboxSettingsPanel({ embedded = false }: { embedded?: 
 
       <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] px-5 py-5 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Communication - Step 1</p>
-        <h3 className="mt-2 text-xl font-semibold tracking-tight text-[var(--foreground)]">Connect mailbox</h3>
+        <h3 className="mt-2 text-xl font-semibold tracking-tight text-[var(--foreground)]">Connect inbox and calendar</h3>
         <div className="mt-3 space-y-2 text-sm">
           <p className="text-[var(--foreground)]"><span className="font-semibold">Current state:</span> {currentMailboxState}</p>
-          <p className="text-[var(--foreground)]"><span className="font-semibold">Why it matters:</span> Email connection powers AI summaries, CRM timeline updates, and reliable daily briefing sources.</p>
+          <p className="text-[var(--foreground)]"><span className="font-semibold">Why it matters:</span> Inbox and calendar connection powers AI summaries, CRM timeline updates, personal event sync, and reliable daily briefing sources.</p>
           <p className="text-[var(--foreground)]"><span className="font-semibold">Next action:</span> {mailboxNextAction}</p>
         </div>
       </div>

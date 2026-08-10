@@ -849,7 +849,7 @@ export default function CalendarPanel() {
               href="/settings/mailbox"
               className="rounded-full border border-red-400 bg-red-500 px-3 py-1 font-semibold uppercase tracking-[0.1em] text-white transition hover:bg-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
             >
-              Fix calendar connection
+              Connect calendar to create personal event
             </Link>
             <span className="rounded-full border border-red-300 bg-red-50 px-3 py-1 font-semibold uppercase tracking-[0.08em] text-red-700">
               Some calendar data may be missing
@@ -950,9 +950,12 @@ export default function CalendarPanel() {
                 </label>
 
                 {connectedProviders.length === 0 ? (
-                  <p className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                    Connect a calendar account in mailbox settings to create personal events.
-                  </p>
+                  <Link
+                    href="/settings/mailbox"
+                    className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 transition hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+                  >
+                    Connect calendar to create personal event
+                  </Link>
                 ) : null}
                 {personalFormError ? <p className="md:col-span-2 text-sm text-red-500">{personalFormError}</p> : null}
                 {personalFormMessage ? <p className="md:col-span-2 text-sm text-emerald-600">{personalFormMessage}</p> : null}

@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import assistantLogo from "@/public/assistant-logo.png.jpg";
 
 import { ChatAssistantWidget } from "@/components/chat-assistant-widget";
 import { CreditBalanceBadge } from "@/components/credit-balance-badge";
@@ -82,6 +84,15 @@ const titles: Record<string, { title: string; subtitle: string }> = {
   },
 };
 
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_DEFAULT_WIDTH = 288;
+const SIDEBAR_WIDTH_STORAGE_KEY = "versaline.sidebar.width";
+
+function clampSidebarWidth(value: number) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, value));
+}
+
 function getHeaderContent(pathname: string) {
   return titles[pathname] ?? titles["/dashboard"];
 }
@@ -112,6 +123,10 @@ function formatMemberName(firstName: string | null, lastName: string | null) {
   return fullName || "Unnamed member";
 }
 
+type InboxUnreadUpdatedEvent = CustomEvent<{
+  unreadCount?: number;
+}>;
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -122,12 +137,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [userInitials, setUserInitials] = useState("US");
   const [themeMode, setThemeMode] = useState<"light" | "dark">("light");
   const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [supportSubject, setSupportSubject] = useState("");
   const [supportMessage, setSupportMessage] = useState("");
   const [supportStatus, setSupportStatus] = useState<string | null>(null);
   const [isSendingSupport, setIsSendingSupport] = useState(false);
   const [isSwitchingWorkspace, setIsSwitchingWorkspace] = useState(false);
   const [workspaceSwitchMessage, setWorkspaceSwitchMessage] = useState<string | null>(null);
+  const [hasUnreadInboxMessages, setHasUnreadInboxMessages] = useState(false);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
   const { workspace } = useCurrentWorkspace();
   const { members: workspaceMembers, isLoading: isMembersLoading, currentUserId, refresh: refreshMembers } = useWorkspaceMembers();
@@ -148,6 +166,66 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     setIsWorkspaceMenuOpen(false);
     setIsSupportModalOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const rawValue = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+
+    if (!rawValue) {
+      return;
+    }
+
+    const parsed = Number.parseInt(rawValue, 10);
+
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+
+    setSidebarWidth(clampSidebarWidth(parsed));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!isResizingSidebar) {
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (window.innerWidth < 768) {
+        return;
+      }
+
+      setSidebarWidth(clampSidebarWidth(event.clientX));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingSidebar(false);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [isResizingSidebar]);
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
@@ -225,6 +303,60 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     };
 
     void syncAppearancePreferences();
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const refreshInboxUnreadState = async () => {
+      try {
+        const response = await fetch("/api/inbox?mailbox=inbox", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          if (!isCancelled) {
+            setHasUnreadInboxMessages(false);
+          }
+          return;
+        }
+
+        const payload = (await response.json()) as {
+          ok?: boolean;
+          messages?: Array<{ isUnread?: boolean }>;
+        };
+
+        if (!isCancelled) {
+          const unreadCount = (payload.messages ?? []).filter((entry) => entry.isUnread).length;
+          setHasUnreadInboxMessages(unreadCount > 0);
+        }
+      } catch {
+        if (!isCancelled) {
+          setHasUnreadInboxMessages(false);
+        }
+      }
+    };
+
+    const handleInboxUnreadUpdated = (event: Event) => {
+      const detail = (event as InboxUnreadUpdatedEvent).detail;
+      const unreadCount = typeof detail?.unreadCount === "number" ? detail.unreadCount : 0;
+      setHasUnreadInboxMessages(unreadCount > 0);
+    };
+
+    void refreshInboxUnreadState();
+    const intervalId = window.setInterval(() => {
+      void refreshInboxUnreadState();
+    }, 60000);
+
+    window.addEventListener("focus", refreshInboxUnreadState);
+    window.addEventListener("inbox-unread-updated", handleInboxUnreadUpdated as EventListener);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshInboxUnreadState);
+      window.removeEventListener("inbox-unread-updated", handleInboxUnreadUpdated as EventListener);
+    };
   }, []);
 
   useEffect(() => {
@@ -407,7 +539,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen text-[var(--foreground)] md:grid md:grid-cols-[17rem_minmax(0,1fr)]">
+    <div className="min-h-screen text-[var(--foreground)] md:grid" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}>
       <div
         className={`fixed inset-0 z-30 bg-[rgba(10,17,40,0.42)] transition md:hidden ${
           isSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"
@@ -416,9 +548,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       />
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-72 overflow-y-auto border-r border-white/10 bg-[linear-gradient(180deg,rgba(10,17,40,0.98)_0%,rgba(15,23,42,0.96)_55%,rgba(17,24,39,0.94)_100%)] px-4 py-5 text-white shadow-2xl shadow-[rgba(10,17,40,0.28)] backdrop-blur transition-transform duration-200 md:sticky md:top-0 md:z-10 md:h-screen md:translate-x-0 md:pointer-events-auto md:shadow-none ${
+        className={`fixed inset-y-0 left-0 z-40 overflow-y-auto border-r border-white/10 bg-[linear-gradient(180deg,rgba(10,17,40,0.98)_0%,rgba(15,23,42,0.96)_55%,rgba(17,24,39,0.94)_100%)] px-4 py-5 text-white shadow-2xl shadow-[rgba(10,17,40,0.28)] backdrop-blur transition-transform duration-200 md:sticky md:top-0 md:z-10 md:h-screen md:translate-x-0 md:pointer-events-auto md:shadow-none relative ${
           isSidebarOpen ? "translate-x-0 pointer-events-auto" : "-translate-x-[120%] pointer-events-none"
         }`}
+        style={{ width: `${sidebarWidth}px` }}
       >
           <div className="flex h-full flex-col">
             <div className="border-b border-white/10 px-1 pb-5">
@@ -449,7 +582,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       }`}
                       aria-hidden="true"
                     />
-                    <span className="text-[0.94rem] font-medium tracking-[0.01em]">{item.label}</span>
+                    <span className="inline-flex items-center gap-1.5 text-[0.94rem] font-medium tracking-[0.01em]">
+                      <span>{item.label}</span>
+                      {item.href === "/inbox" && hasUnreadInboxMessages ? (
+                        <span className="h-2 w-2 rounded-full bg-sky-300" aria-label="Inbox has unread messages" />
+                      ) : null}
+                    </span>
                   </Link>
                 );
               })}
@@ -495,11 +633,29 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="mx-1 mt-6 border-t border-white/10 pt-4">
-              <p className="text-sm font-medium text-white/75">
-                ® Versaline by Cap AI
-              </p>
+              <div className="flex items-center gap-2 text-sm font-medium text-white/75">
+                <span className="inline-flex h-5 w-5 items-center justify-center overflow-hidden rounded-full border border-white/20">
+                  <Image src={assistantLogo} alt="" aria-hidden="true" className="h-full w-full object-cover" />
+                </span>
+                <p>® Versaline by Cap AI</p>
+              </div>
             </div>
           </div>
+          <button
+            type="button"
+            aria-label="Resize sidebar"
+            onMouseDown={() => {
+              if (window.innerWidth < 768) {
+                return;
+              }
+
+              setIsResizingSidebar(true);
+            }}
+            onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
+            className="absolute inset-y-0 -right-1 hidden w-2 cursor-col-resize md:block"
+          >
+            <span className="mx-auto my-3 block h-[calc(100%-1.5rem)] w-px rounded-full bg-white/12 transition hover:bg-white/35" aria-hidden="true" />
+          </button>
         </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">

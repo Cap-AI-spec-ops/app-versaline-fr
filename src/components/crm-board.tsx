@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { withSessionReloadFallback } from "@/lib/auth/session-error-message";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useCurrentWorkspace } from "@/lib/workspace/use-current-workspace";
@@ -623,6 +623,34 @@ function normalizeStringArrayForCompare(values: string[]) {
   return [...values].sort();
 }
 
+function dedupeContactsById(contacts: CrmContact[]) {
+  const deduped = new Map<string, CrmContact>();
+
+  for (const contact of contacts) {
+    if (!contact?.id) {
+      continue;
+    }
+
+    const existing = deduped.get(contact.id);
+
+    if (!existing) {
+      deduped.set(contact.id, contact);
+      continue;
+    }
+
+    const existingTs = Date.parse(existing.updated_at ?? "");
+    const incomingTs = Date.parse(contact.updated_at ?? "");
+
+    if (Number.isFinite(incomingTs) && (!Number.isFinite(existingTs) || incomingTs >= existingTs)) {
+      deduped.set(contact.id, contact);
+    }
+  }
+
+  return Array.from(deduped.values()).sort(
+    (left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+  );
+}
+
 function createContactDetailsDraftSnapshot(
   contact: CrmContact,
   followUpInput: string,
@@ -693,9 +721,6 @@ export default function CrmBoard() {
   const [isSendingOutbound, setIsSendingOutbound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  const [deletePhraseInput, setDeletePhraseInput] = useState("");
-  const [isDeleteFinalCheckEnabled, setIsDeleteFinalCheckEnabled] = useState(false);
   const [contactSearchQuery, setContactSearchQuery] = useState("");
   const [onlyHighPriorityContacts, setOnlyHighPriorityContacts] = useState(false);
   const [timelineSearchQuery, setTimelineSearchQuery] = useState("");
@@ -706,6 +731,7 @@ export default function CrmBoard() {
   const [isEmailFeatureEnabled, setIsEmailFeatureEnabled] = useState(false);
   const [isTwilioFeatureEnabled, setIsTwilioFeatureEnabled] = useState(false);
   const [isEmailPolicyLoading, setIsEmailPolicyLoading] = useState(true);
+  const contactDetailsPanelRef = useRef<HTMLElement | null>(null);
   const canSwitchWorkspaceScope = currentRole === "super_admin" || currentRole === "owner";
   const canDeleteContacts = currentRole === "super_admin" || currentRole === "owner" || currentRole === "team_lead";
   const inviteTeammateHref = canSwitchWorkspaceScope ? "/admin" : "/settings";
@@ -730,7 +756,6 @@ export default function CrmBoard() {
 
     return names;
   }, [workspaceMembers]);
-  const deleteConfirmationPhrase = selectedContact ? `DELETE ${getContactName(selectedContact)}` : "";
   const filteredContacts = useMemo(() => {
     const normalizedQuery = contactSearchQuery.trim().toLowerCase();
 
@@ -924,6 +949,43 @@ export default function CrmBoard() {
   }, [contacts, isContactDetailsOpen, router, searchParams, selectedContactId]);
 
   useEffect(() => {
+    const shouldOpenCreateContact = searchParams.get("createContact") === "1";
+
+    if (!shouldOpenCreateContact) {
+      return;
+    }
+
+    const prefillEmail = searchParams.get("email")?.trim() ?? "";
+    const prefillFirstName = searchParams.get("firstName")?.trim() || "Email";
+    const prefillLastName = searchParams.get("lastName")?.trim() || "Contact";
+    const prefillSource = searchParams.get("source")?.trim() || "inbox";
+
+    setContactForm({
+      ...EMPTY_CONTACT_FORM,
+      first_name: prefillFirstName,
+      last_name: prefillLastName,
+      email: prefillEmail,
+      source: prefillSource,
+      preferred_channel: "email",
+      currency: workspace?.currency ?? "EUR",
+      assignee_profile_ids: currentUserId ? [currentUserId] : [],
+    });
+    setContactFollowUpDateError(null);
+    setIsCreateFormOpen(true);
+    setError(null);
+    setMessage("Complete contact details, then click Create contact.");
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("createContact");
+    nextParams.delete("email");
+    nextParams.delete("firstName");
+    nextParams.delete("lastName");
+    nextParams.delete("source");
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `/contacts?${nextQuery}` : "/contacts", { scroll: false });
+  }, [currentUserId, router, searchParams, workspace?.currency]);
+
+  useEffect(() => {
     async function loadEmailPolicy(companyId: string, workspaceId: string) {
       const supabase = getSupabaseBrowserClient();
 
@@ -982,12 +1044,6 @@ export default function CrmBoard() {
   }, [workspace?.id, selectedContactId, isEmailFeatureEnabled]);
 
   useEffect(() => {
-    setIsDeleteConfirmOpen(false);
-    setDeletePhraseInput("");
-    setIsDeleteFinalCheckEnabled(false);
-  }, [selectedContactId]);
-
-  useEffect(() => {
     if (!selectedContactId) {
       setIsContactDetailsOpen(false);
     }
@@ -1022,7 +1078,7 @@ export default function CrmBoard() {
     const rows = ((data ?? []) as CrmContact[]).filter(
       (contact) => contact.stage !== "archived" && contact.stage !== "closed_lost",
     );
-    setContacts(rows);
+    setContacts(dedupeContactsById(rows));
 
     const contactIds = rows.map((row) => row.id);
     void loadAssigneesForContacts(workspaceId, contactIds);
@@ -1384,7 +1440,7 @@ export default function CrmBoard() {
       return;
     }
 
-    setContacts((previous) => [created, ...previous]);
+    setContacts((previous) => dedupeContactsById([created, ...previous]));
     setSelectedContactId(created.id);
     setContactForm({
       ...EMPTY_CONTACT_FORM,
@@ -1505,7 +1561,7 @@ export default function CrmBoard() {
       return;
     }
 
-    setContacts((previous) => previous.map((contact) => (contact.id === updated.id ? updated : contact)));
+    setContacts((previous) => dedupeContactsById(previous.map((contact) => (contact.id === updated.id ? updated : contact))));
     const savedFollowUpInput = formatDateOnly(updated.next_follow_up_at, "");
     setSelectedFollowUpInput(savedFollowUpInput);
     setContactDetailsDraftBaseline(
@@ -1542,7 +1598,7 @@ export default function CrmBoard() {
       contact.id === contactId ? { ...contact, stage: nextStage, updated_at: new Date().toISOString() } : contact,
     );
 
-    setContacts(optimistic);
+    setContacts(dedupeContactsById(optimistic));
 
     const { data, error: updateError } = await supabase
       .from("crm_contacts")
@@ -1554,7 +1610,7 @@ export default function CrmBoard() {
 
     if (updateError) {
       setContacts((previous) =>
-        previous.map((contact) => (contact.id === contactId ? { ...contact, stage: source.stage } : contact)),
+        dedupeContactsById(previous.map((contact) => (contact.id === contactId ? { ...contact, stage: source.stage } : contact))),
       );
       setError(withSessionReloadFallback(updateError.message, "Could not update contact stage."));
       return;
@@ -1562,7 +1618,7 @@ export default function CrmBoard() {
 
     const updated = data as CrmContact;
 
-    setContacts((previous) => previous.map((contact) => (contact.id === updated.id ? updated : contact)));
+    setContacts((previous) => dedupeContactsById(previous.map((contact) => (contact.id === updated.id ? updated : contact))));
     setMessage(`${getContactName(updated)} moved to ${STAGE_COLUMNS.find((column) => column.key === nextStage)?.label}.`);
 
     if (selectedContactId === contactId) {
@@ -1600,9 +1656,52 @@ export default function CrmBoard() {
 
     const archivedId = selectedContact.id;
     const remaining = contacts.filter((contact) => contact.id !== archivedId);
-    setContacts(remaining);
+    setContacts(dedupeContactsById(remaining));
     setSelectedContactId(remaining[0]?.id ?? null);
     setMessage("Contact archived.");
+    setIsSaving(false);
+  }
+
+  async function turnOffFollowUpReminder() {
+    if (!workspace?.id || !selectedContact) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    setMessage(null);
+
+    const { error: updateError } = await supabase
+      .from("crm_contacts")
+      .update({ next_follow_up_at: null })
+      .eq("id", selectedContact.id)
+      .eq("workspace_id", workspace.id);
+
+    if (updateError) {
+      setError(withSessionReloadFallback(updateError.message, "Could not turn off follow-up reminder."));
+      setIsSaving(false);
+      return;
+    }
+
+    setContacts((previous) =>
+      dedupeContactsById(
+        previous.map((contact) =>
+          contact.id === selectedContact.id
+            ? { ...contact, next_follow_up_at: null, updated_at: new Date().toISOString() }
+            : contact,
+        ),
+      ),
+    );
+    setSelectedFollowUpInput("");
+    setSelectedFollowUpDateError(null);
+    setMessage("Follow-up reminder turned off.");
     setIsSaving(false);
   }
 
@@ -1612,17 +1711,21 @@ export default function CrmBoard() {
       return;
     }
 
-    setIsDeleteConfirmOpen(true);
-    setDeletePhraseInput("");
-    setIsDeleteFinalCheckEnabled(false);
+    if (!selectedContact) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${getContactName(selectedContact)} permanently? This cannot be undone.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    void deleteSelectedContact();
     setError(null);
     setMessage(null);
-  }
-
-  function cancelDeleteSelectedContact() {
-    setIsDeleteConfirmOpen(false);
-    setDeletePhraseInput("");
-    setIsDeleteFinalCheckEnabled(false);
   }
 
   function openContactDetails(contactId: string) {
@@ -1702,6 +1805,39 @@ export default function CrmBoard() {
     closeContactDetails();
   }
 
+  useEffect(() => {
+    if (!isContactDetailsOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (isDiscardChangesDialogOpen) {
+        return;
+      }
+
+      const panel = contactDetailsPanelRef.current;
+      const targetNode = event.target as Node | null;
+
+      if (!panel || !targetNode) {
+        return;
+      }
+
+      if (panel.contains(targetNode)) {
+        return;
+      }
+
+      requestCloseContactDetails();
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, [isContactDetailsOpen, isDiscardChangesDialogOpen, requestCloseContactDetails]);
+
   function cancelDiscardContactDetailsChanges() {
     setIsDiscardChangesDialogOpen(false);
   }
@@ -1711,7 +1847,7 @@ export default function CrmBoard() {
       const baselineContact = contactDetailsDraftBaseline.contact;
 
       setContacts((previous) =>
-        previous.map((contact) =>
+        dedupeContactsById(previous.map((contact) =>
           contact.id === selectedContactId
             ? {
                 ...baselineContact,
@@ -1736,7 +1872,7 @@ export default function CrmBoard() {
                   : null,
               }
             : contact,
-        ),
+        )),
       );
       setSelectedFollowUpInput(contactDetailsDraftBaseline.followUpInput);
       setSelectedFollowUpDateError(null);
@@ -1766,16 +1902,6 @@ export default function CrmBoard() {
       return;
     }
 
-    if (deletePhraseInput.trim() !== deleteConfirmationPhrase) {
-      setError("Confirmation phrase mismatch. Deletion aborted.");
-      return;
-    }
-
-    if (!isDeleteFinalCheckEnabled) {
-      setError("Please confirm that deletion is permanent.");
-      return;
-    }
-
     setIsSaving(true);
     setError(null);
     setMessage(null);
@@ -1795,13 +1921,12 @@ export default function CrmBoard() {
     }
 
     const remaining = contacts.filter((contact) => contact.id !== deletingId);
-    setContacts(remaining);
+    setContacts(dedupeContactsById(remaining));
     setAssigneesByContact((previous) => {
       const next = { ...previous };
       delete next[deletingId];
       return next;
     });
-    cancelDeleteSelectedContact();
     setSelectedContactId(remaining[0]?.id ?? null);
     setMessage("Contact permanently deleted.");
     setIsSaving(false);
@@ -1907,7 +2032,9 @@ export default function CrmBoard() {
     }
 
     setContacts((previous) =>
-      previous.map((contact) => (contact.id === selectedContactId ? { ...contact, [key]: value } : contact)),
+      dedupeContactsById(
+        previous.map((contact) => (contact.id === selectedContactId ? { ...contact, [key]: value } : contact)),
+      ),
     );
   }
 
@@ -1935,7 +2062,7 @@ export default function CrmBoard() {
     }
 
     setContacts((previous) =>
-      previous.map((contact) => {
+      dedupeContactsById(previous.map((contact) => {
         if (contact.id !== selectedContactId) {
           return contact;
         }
@@ -1959,7 +2086,7 @@ export default function CrmBoard() {
           client_type: primaryRole,
           budget: shouldKeepBudget ? contact.budget : null,
         };
-      }),
+      })),
     );
   }
 
@@ -2808,9 +2935,9 @@ export default function CrmBoard() {
                   </div>
 
                   <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-                    {columnContacts.map((contact) => (
+                    {columnContacts.map((contact, index) => (
                       <button
-                        key={contact.id}
+                        key={`${contact.id}-${column.key}-${index}`}
                         type="button"
                         draggable
                         onDragStart={() => setDraggedContactId(contact.id)}
@@ -2966,6 +3093,7 @@ export default function CrmBoard() {
         ) : null}
 
         <aside
+          ref={contactDetailsPanelRef}
           className={`${isContactDetailsOpen ? "fixed left-1/2 top-4 z-50 max-h-[92vh] w-[min(1120px,calc(100vw-1.5rem))] -translate-x-1/2 overflow-y-auto rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] p-4 shadow-2xl" : "hidden"}`}
         >
           <div className="mb-3 flex items-center justify-between gap-2 border-b border-[var(--border)] pb-3">
@@ -3458,54 +3586,6 @@ export default function CrmBoard() {
                   >
                     Delete contact permanently
                   </button>
-                  {isDeleteConfirmOpen ? (
-                    <div className="rounded-xl border border-red-300 bg-red-50/70 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-700">Final deletion check</p>
-                      <p className="mt-1 text-xs text-red-700">
-                        This permanently removes this contact, timeline, and assignments.
-                      </p>
-                      <p className="mt-2 text-xs text-red-700">
-                        Type exactly: <span className="font-semibold">{deleteConfirmationPhrase}</span>
-                      </p>
-                      <input
-                        value={deletePhraseInput}
-                        onChange={(event) => setDeletePhraseInput(event.target.value)}
-                        placeholder={deleteConfirmationPhrase}
-                        className="mt-2 w-full rounded-lg border border-red-200 bg-white px-3 py-2 text-sm outline-none focus:border-red-400"
-                      />
-                      <label className="mt-2 flex items-center gap-2 text-xs text-red-700">
-                        <input
-                          type="checkbox"
-                          checked={isDeleteFinalCheckEnabled}
-                          onChange={(event) => setIsDeleteFinalCheckEnabled(event.target.checked)}
-                          className="h-4 w-4 rounded border border-red-300"
-                        />
-                        I understand this action is permanent and cannot be undone.
-                      </label>
-                      <div className="mt-3 flex items-center gap-2">
-                        <button
-                          type="button"
-                          disabled={
-                            isSaving ||
-                            deletePhraseInput.trim() !== deleteConfirmationPhrase ||
-                            !isDeleteFinalCheckEnabled
-                          }
-                          onClick={() => void deleteSelectedContact()}
-                          className="rounded-lg border border-red-500 bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Permanently delete now
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isSaving}
-                          onClick={cancelDeleteSelectedContact}
-                          className="rounded-lg border border-[var(--border)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--foreground)] transition hover:bg-slate-50 disabled:opacity-60"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
                 </form>
               </div>
 
@@ -3742,9 +3822,19 @@ export default function CrmBoard() {
                               </p>
                             )}
                           </div>
-                          <span className="rounded-full border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
-                            follow-up
-                          </span>
+                          <div className="flex flex-col items-end gap-1.5">
+                            <span className="rounded-full border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                              follow-up
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={() => void turnOffFollowUpReminder()}
+                              className="rounded-lg border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              Turn off
+                            </button>
+                          </div>
                         </div>
                         <p className="mt-2 text-xs font-medium text-amber-800">
                           Due: {formatDateOnly(selectedContact.next_follow_up_at)}

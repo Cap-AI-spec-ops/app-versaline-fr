@@ -7,7 +7,8 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-const INBOX_LIST_MAX_RESULTS = 40;
+const INBOX_LOOKBACK_DAYS = 30;
+const INBOX_LIST_PAGE_SIZE = 200;
 const GMAIL_DETAIL_FETCH_CONCURRENCY = 12;
 
 type MailProvider = "gmail" | "outlook";
@@ -358,13 +359,7 @@ async function getListView(mailbox: MailboxView) {
 
     const messages = Array.from(messagesByKey.values());
 
-    messages.sort((left, right) => {
-      if (left.isUnread !== right.isUnread) {
-        return left.isUnread ? -1 : 1;
-      }
-
-      return new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime();
-    });
+    messages.sort((left, right) => new Date(right.receivedAt).getTime() - new Date(left.receivedAt).getTime());
 
     let assignments = new Map<string, string | null>();
 
@@ -555,29 +550,47 @@ async function listGmailMessages(accessToken: string, mailbox: MailboxView): Pro
     return listGmailDraftMessages(accessToken);
   }
 
-  const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-  listUrl.searchParams.set("maxResults", String(INBOX_LIST_MAX_RESULTS));
-  listUrl.searchParams.set("q", buildGmailMailboxQuery(mailbox));
+  const rawItems: Array<{ messageId: string; threadId: string | null }> = [];
+  let pageToken: string | undefined;
 
-  const listResponse = await fetch(listUrl.toString(), {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-    cache: "no-store",
-  });
+  while (true) {
+    const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+    listUrl.searchParams.set("maxResults", String(INBOX_LIST_PAGE_SIZE));
+    listUrl.searchParams.set("q", buildGmailMailboxQuery(mailbox));
 
-  if (!listResponse.ok) {
-    throw new Error(await parseProviderError("gmail", listResponse));
+    if (pageToken) {
+      listUrl.searchParams.set("pageToken", pageToken);
+    }
+
+    const listResponse = await fetch(listUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!listResponse.ok) {
+      throw new Error(await parseProviderError("gmail", listResponse));
+    }
+
+    const listPayload = (await listResponse.json()) as {
+      messages?: Array<{ id?: string; threadId?: string }>;
+      nextPageToken?: string;
+    };
+
+    const pageItems = (listPayload.messages ?? []).map((item) => ({
+      messageId: item.id?.trim() ?? "",
+      threadId: item.threadId?.trim() || null,
+    }));
+
+    rawItems.push(...pageItems);
+
+    if (!listPayload.nextPageToken || pageItems.length === 0) {
+      break;
+    }
+
+    pageToken = listPayload.nextPageToken;
   }
-
-  const listPayload = (await listResponse.json()) as {
-    messages?: Array<{ id?: string; threadId?: string }>;
-  };
-
-  const rawItems = (listPayload.messages ?? []).map((item) => ({
-    messageId: item.id?.trim() ?? "",
-    threadId: item.threadId?.trim() || null,
-  }));
 
   const hydrated = await mapWithConcurrency(rawItems, GMAIL_DETAIL_FETCH_CONCURRENCY, async (item) => {
     if (!item.messageId) {
@@ -646,63 +659,28 @@ async function listGmailMessages(accessToken: string, mailbox: MailboxView): Pro
 }
 
 async function listOutlookMessages(accessToken: string, mailbox: MailboxView): Promise<InboxMessage[]> {
-  const listUrl = new URL(`https://graph.microsoft.com/v1.0/me/mailFolders/${getOutlookFolderName(mailbox)}/messages`);
-  listUrl.searchParams.set("$top", String(INBOX_LIST_MAX_RESULTS));
-  listUrl.searchParams.set("$orderby", "receivedDateTime desc");
-  listUrl.searchParams.set(
-    "$select",
-    "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead",
-  );
+  const cutoffTime = Date.now() - INBOX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const selectFields = "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead";
+  const pageSize = Math.min(200, INBOX_LIST_PAGE_SIZE);
+  const messages: InboxMessage[] = [];
 
-  const response = await fetch(listUrl.toString(), {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Prefer: `outlook.body-content-type="text", odata.maxpagesize=${INBOX_LIST_MAX_RESULTS}`,
-    },
-    cache: "no-store",
-  });
+  async function collectFromUrl(initialUrl: string) {
+    let nextUrl: string | null = initialUrl;
 
-  if (!response.ok) {
-    throw new Error(await parseProviderError("outlook", response));
-  }
+    while (nextUrl) {
+      const response = await fetch(nextUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Prefer: `outlook.body-content-type="text", odata.maxpagesize=${pageSize}`,
+        },
+        cache: "no-store",
+      });
 
-  let payload = (await response.json()) as {
-    value?: Array<{
-      id?: string;
-      conversationId?: string;
-      subject?: string;
-      bodyPreview?: string;
-      receivedDateTime?: string;
-      isRead?: boolean;
-      parentFolderId?: string;
-      from?: {
-        emailAddress?: {
-          address?: string;
-          name?: string;
-        };
-      };
-    }>;
-  };
+      if (!response.ok) {
+        throw new Error(await parseProviderError("outlook", response));
+      }
 
-  if (mailbox === "inbox" && (!Array.isArray(payload.value) || payload.value.length === 0)) {
-    const fallbackUrl = new URL("https://graph.microsoft.com/v1.0/me/messages");
-    fallbackUrl.searchParams.set("$top", String(INBOX_LIST_MAX_RESULTS));
-    fallbackUrl.searchParams.set("$orderby", "receivedDateTime desc");
-    fallbackUrl.searchParams.set(
-      "$select",
-      "id,conversationId,subject,from,bodyPreview,receivedDateTime,isRead",
-    );
-
-    const fallbackResponse = await fetch(fallbackUrl.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Prefer: `outlook.body-content-type="text", odata.maxpagesize=${INBOX_LIST_MAX_RESULTS}`,
-      },
-      cache: "no-store",
-    });
-
-    if (fallbackResponse.ok) {
-      payload = (await fallbackResponse.json()) as {
+      const payload = (await response.json()) as {
         value?: Array<{
           id?: string;
           conversationId?: string;
@@ -718,60 +696,107 @@ async function listOutlookMessages(accessToken: string, mailbox: MailboxView): P
             };
           };
         }>;
+        "@odata.nextLink"?: string;
       };
+
+      let reachedCutoff = false;
+
+      for (const message of payload.value ?? []) {
+        const id = message.id?.trim();
+
+        if (!id) {
+          continue;
+        }
+
+        const receivedAt = message.receivedDateTime?.trim() || new Date().toISOString();
+        const receivedAtMs = Date.parse(receivedAt);
+
+        if (!Number.isNaN(receivedAtMs) && receivedAtMs < cutoffTime) {
+          reachedCutoff = true;
+          break;
+        }
+
+        messages.push({
+          key: `outlook:${id}`,
+          provider: "outlook",
+          messageId: id,
+          threadId: message.conversationId?.trim() || null,
+          subject: message.subject?.trim() || "(No subject)",
+          from:
+            message.from?.emailAddress?.name?.trim() ||
+            message.from?.emailAddress?.address?.trim() ||
+            "Unknown sender",
+          snippet: message.bodyPreview?.trim() || "",
+          receivedAt,
+          isUnread: !Boolean(message.isRead),
+          isArchived: false,
+          assignedToProfileId: null,
+        });
+      }
+
+      if (reachedCutoff) {
+        break;
+      }
+
+      nextUrl = payload["@odata.nextLink"] ?? null;
     }
   }
 
-  const messages: InboxMessage[] = [];
+  const listUrl = new URL(`https://graph.microsoft.com/v1.0/me/mailFolders/${getOutlookFolderName(mailbox)}/messages`);
+  listUrl.searchParams.set("$top", String(pageSize));
+  listUrl.searchParams.set("$orderby", "receivedDateTime desc");
+  listUrl.searchParams.set("$select", selectFields);
 
-  for (const message of payload.value ?? []) {
-    const id = message.id?.trim();
+  await collectFromUrl(listUrl.toString());
 
-    if (!id) {
-      continue;
-    }
-
-    messages.push({
-      key: `outlook:${id}`,
-      provider: "outlook",
-      messageId: id,
-      threadId: message.conversationId?.trim() || null,
-      subject: message.subject?.trim() || "(No subject)",
-      from:
-        message.from?.emailAddress?.name?.trim() ||
-        message.from?.emailAddress?.address?.trim() ||
-        "Unknown sender",
-      snippet: message.bodyPreview?.trim() || "",
-      receivedAt: message.receivedDateTime?.trim() || new Date().toISOString(),
-      isUnread: !Boolean(message.isRead),
-      isArchived: false,
-      assignedToProfileId: null,
-    });
+  if (mailbox === "inbox" && messages.length === 0) {
+    const fallbackUrl = new URL("https://graph.microsoft.com/v1.0/me/messages");
+    fallbackUrl.searchParams.set("$top", String(pageSize));
+    fallbackUrl.searchParams.set("$orderby", "receivedDateTime desc");
+    fallbackUrl.searchParams.set("$select", selectFields);
+    await collectFromUrl(fallbackUrl.toString());
   }
 
   return messages;
 }
 
 async function listGmailDraftMessages(accessToken: string): Promise<InboxMessage[]> {
-  const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/drafts");
-  listUrl.searchParams.set("maxResults", String(INBOX_LIST_MAX_RESULTS));
+  const draftIds: string[] = [];
+  let pageToken: string | undefined;
 
-  const listResponse = await fetch(listUrl.toString(), {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-    cache: "no-store",
-  });
+  while (true) {
+    const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/drafts");
+    listUrl.searchParams.set("maxResults", String(INBOX_LIST_PAGE_SIZE));
 
-  if (!listResponse.ok) {
-    throw new Error(await parseProviderError("gmail", listResponse));
+    if (pageToken) {
+      listUrl.searchParams.set("pageToken", pageToken);
+    }
+
+    const listResponse = await fetch(listUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!listResponse.ok) {
+      throw new Error(await parseProviderError("gmail", listResponse));
+    }
+
+    const listPayload = (await listResponse.json()) as {
+      drafts?: Array<{ id?: string; message?: { id?: string; threadId?: string } }>;
+      nextPageToken?: string;
+    };
+
+    const pageIds = (listPayload.drafts ?? []).map((item) => item.id?.trim() ?? "");
+    draftIds.push(...pageIds);
+
+    if (!listPayload.nextPageToken || pageIds.length === 0) {
+      break;
+    }
+
+    pageToken = listPayload.nextPageToken;
   }
-
-  const listPayload = (await listResponse.json()) as {
-    drafts?: Array<{ id?: string; message?: { id?: string; threadId?: string } }>;
-  };
-
-  const draftIds = (listPayload.drafts ?? []).map((item) => item.id?.trim() ?? "");
 
   const hydrated = await mapWithConcurrency(draftIds, GMAIL_DETAIL_FETCH_CONCURRENCY, async (draftId) => {
     if (!draftId) {
@@ -848,14 +873,14 @@ function isNonNull<T>(value: T | null): value is T {
 
 function buildGmailMailboxQuery(mailbox: MailboxView) {
   if (mailbox === "archive") {
-    return "-in:inbox -in:trash -in:spam newer_than:180d";
+    return `-in:inbox -in:trash -in:spam newer_than:${INBOX_LOOKBACK_DAYS}d`;
   }
 
   if (mailbox === "deleted") {
-    return "in:trash newer_than:180d";
+    return `in:trash newer_than:${INBOX_LOOKBACK_DAYS}d`;
   }
 
-  return "in:inbox newer_than:180d";
+  return `in:inbox newer_than:${INBOX_LOOKBACK_DAYS}d`;
 }
 
 function getOutlookFolderName(mailbox: MailboxView) {

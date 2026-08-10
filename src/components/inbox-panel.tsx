@@ -67,11 +67,29 @@ type CrmContactSuggestion = {
   label: string;
 };
 
+type SenderCrmContact = {
+  id: string;
+  fullName: string;
+  email: string | null;
+};
+
 type InboxThreadResponse = {
   ok?: boolean;
   error?: string;
   thread?: InboxThreadMessage[];
 };
+
+function publishInboxUnreadCount(unreadCount: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent("inbox-unread-updated", {
+      detail: { unreadCount },
+    }),
+  );
+}
 
 async function readJsonSafe<T>(response: Response): Promise<T> {
   const raw = await response.text();
@@ -93,7 +111,7 @@ export default function InboxPanel() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [thread, setThread] = useState<InboxThreadMessage[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filter, setFilter] = useState<"priority" | "all" | "unread">("priority");
+  const [filter, setFilter] = useState<"priority" | "all" | "unread">("all");
   const [mailbox, setMailbox] = useState<"inbox" | "archive" | "drafts" | "deleted">("inbox");
   const [replyDraft, setReplyDraft] = useState("");
   const [replyDraftHtml, setReplyDraftHtml] = useState("");
@@ -120,10 +138,14 @@ export default function InboxPanel() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<InboxListResponse["diagnostics"] | null>(null);
+  const [senderEmail, setSenderEmail] = useState<string | null>(null);
+  const [senderCrmContact, setSenderCrmContact] = useState<SenderCrmContact | null>(null);
+  const [isSenderCrmLoading, setIsSenderCrmLoading] = useState(false);
   const composeEditorRef = useRef<HTMLDivElement | null>(null);
   const replyEditorRef = useRef<HTMLDivElement | null>(null);
   const composeImageInputRef = useRef<HTMLInputElement | null>(null);
   const replyImageInputRef = useRef<HTMLInputElement | null>(null);
+  const autoReadTimeoutRef = useRef<number | null>(null);
 
   const selectedMessage = useMemo(
     () => messages.find((entry) => entry.key === selectedKey) ?? null,
@@ -134,6 +156,10 @@ export default function InboxPanel() {
     const query = searchQuery.trim().toLowerCase();
 
     return messages.filter((entry) => {
+      if (entry.key === selectedKey) {
+        return true;
+      }
+
       const receivedAtMs = new Date(entry.receivedAt).getTime();
       const isRecent = !Number.isNaN(receivedAtMs) && Date.now() - receivedAtMs <= 1000 * 60 * 60 * 72;
 
@@ -141,7 +167,7 @@ export default function InboxPanel() {
         return false;
       }
 
-      if (filter === "priority" && (entry.isArchived || (!entry.isUnread && !isRecent))) {
+      if (filter === "priority" && (entry.isArchived || !isRecent)) {
         return false;
       }
 
@@ -151,7 +177,7 @@ export default function InboxPanel() {
 
       return [entry.subject, entry.from, entry.snippet].join(" ").toLowerCase().includes(query);
     });
-  }, [filter, messages, searchQuery]);
+  }, [filter, messages, searchQuery, selectedKey]);
 
   const unreadCount = useMemo(() => messages.filter((entry) => entry.isUnread).length, [messages]);
   const hasThreadCc = useMemo(() => thread.some((item) => item.cc.trim().length > 0), [thread]);
@@ -161,11 +187,18 @@ export default function InboxPanel() {
       .map((row) => row.provider);
   }, [diagnostics]);
   const activeComposeProvider = connectedProviders[0] ?? "gmail";
+  const senderPrefill = useMemo(() => {
+    if (!senderEmail) {
+      return null;
+    }
+
+    return parseSenderName(selectedMessage?.from ?? "", senderEmail);
+  }, [selectedMessage?.from, senderEmail]);
   const priorityCount = useMemo(() => {
     return messages.filter((entry) => {
       const receivedAtMs = new Date(entry.receivedAt).getTime();
       const isRecent = !Number.isNaN(receivedAtMs) && Date.now() - receivedAtMs <= 1000 * 60 * 60 * 72;
-      return !entry.isArchived && (entry.isUnread || isRecent);
+      return !entry.isArchived && isRecent;
     }).length;
   }, [messages]);
 
@@ -279,6 +312,126 @@ export default function InboxPanel() {
     setReplyDraftHtml("");
     void loadThread(selectedMessage);
   }, [selectedMessage?.key]);
+
+  useEffect(() => {
+    if (autoReadTimeoutRef.current !== null) {
+      window.clearTimeout(autoReadTimeoutRef.current);
+      autoReadTimeoutRef.current = null;
+    }
+
+    if (!selectedMessage || !selectedMessage.isUnread || isActionLoading) {
+      return;
+    }
+
+    autoReadTimeoutRef.current = window.setTimeout(() => {
+      void runAction({
+        action: "mark_read",
+        provider: selectedMessage.provider,
+        messageId: selectedMessage.messageId,
+      });
+    }, 2000);
+
+    return () => {
+      if (autoReadTimeoutRef.current !== null) {
+        window.clearTimeout(autoReadTimeoutRef.current);
+        autoReadTimeoutRef.current = null;
+      }
+    };
+  }, [isActionLoading, selectedMessage]);
+
+  useEffect(() => {
+    const workspaceId = diagnostics?.workspaceId?.trim() ?? "";
+    const nextSenderEmail = extractEmailAddressFromHeader(selectedMessage?.from ?? "");
+    setSenderEmail(nextSenderEmail);
+
+    if (!workspaceId || !nextSenderEmail) {
+      setSenderCrmContact(null);
+      setIsSenderCrmLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+
+    async function loadSenderCrmContact() {
+      const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        if (!isCancelled) {
+          setSenderCrmContact(null);
+          setIsSenderCrmLoading(false);
+        }
+        return;
+      }
+
+      setIsSenderCrmLoading(true);
+
+      try {
+        let contactId: string | null = null;
+
+        const lookupResult = await supabase.rpc("find_contact_by_email", {
+          p_workspace_id: workspaceId,
+          p_email: nextSenderEmail,
+        });
+
+        if (!lookupResult.error) {
+          const matchedRows = (lookupResult.data ?? []) as Array<{ id?: string | null }>;
+          contactId = matchedRows[0]?.id?.trim() ?? null;
+        }
+
+        if (!contactId) {
+          const { data: fallbackRow } = await supabase
+            .from("crm_contacts")
+            .select("id")
+            .eq("workspace_id", workspaceId)
+            .ilike("email", nextSenderEmail)
+            .order("updated_at", { ascending: false })
+            .limit(1)
+            .maybeSingle<{ id: string }>();
+
+          contactId = fallbackRow?.id?.trim() ?? null;
+        }
+
+        if (!contactId) {
+          if (!isCancelled) {
+            setSenderCrmContact(null);
+          }
+          return;
+        }
+
+        const { data: contactRow } = await supabase
+          .from("crm_contacts")
+          .select("id, first_name, last_name, email")
+          .eq("workspace_id", workspaceId)
+          .eq("id", contactId)
+          .maybeSingle<{ id: string; first_name: string | null; last_name: string | null; email: string | null }>();
+
+        if (!isCancelled) {
+          if (!contactRow) {
+            setSenderCrmContact(null);
+            return;
+          }
+
+          const fullName = `${contactRow.first_name ?? ""} ${contactRow.last_name ?? ""}`.trim() || "Unnamed contact";
+
+          setSenderCrmContact({
+            id: contactRow.id,
+            fullName,
+            email: contactRow.email,
+          });
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsSenderCrmLoading(false);
+        }
+      }
+    }
+
+    void loadSenderCrmContact();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [diagnostics?.workspaceId, selectedMessage?.key]);
 
   useEffect(() => {
     if (!composeEditorRef.current) {
@@ -478,6 +631,10 @@ export default function InboxPanel() {
       setMessages(nextMessages);
       setMembers(nextMembers);
       setDiagnostics(nextDiagnostics);
+
+      if (targetMailbox === "inbox") {
+        publishInboxUnreadCount(nextMessages.filter((entry) => entry.isUnread).length);
+      }
 
       if (nextWarnings.length > 0) {
         setMessage(nextWarnings.join(" "));
@@ -766,7 +923,15 @@ export default function InboxPanel() {
                       : "border-[var(--border)] bg-white/80 text-[var(--muted)] hover:bg-white"
                   }`}
                 >
-                  {item.label}
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>{item.label}</span>
+                    {item.id === "inbox" && unreadCount > 0 ? (
+                      <span
+                        className="h-2 w-2 rounded-full bg-sky-500"
+                        aria-label={`${unreadCount} unread messages`}
+                      />
+                    ) : null}
+                  </span>
                 </button>
               ))}
             </div>
@@ -780,7 +945,7 @@ export default function InboxPanel() {
 
             <div className="flex flex-wrap gap-2">
               {[
-                { id: "priority", label: `Priority (${priorityCount})` },
+                { id: "priority", label: `Recent (${priorityCount})` },
                 { id: "all", label: `All (${messages.length})` },
                 { id: "unread", label: `Unread (${unreadCount})` },
               ].map((item) => (
@@ -798,6 +963,10 @@ export default function InboxPanel() {
                 </button>
               ))}
             </div>
+
+            <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--muted)]">
+              Showing messages from the last 30 days.
+            </p>
           </div>
 
           <div className="mt-4 space-y-2">
@@ -829,9 +998,12 @@ export default function InboxPanel() {
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`text-sm font-semibold ${entry.isUnread ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
-                      {entry.subject}
-                    </span>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {entry.isUnread ? <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" aria-hidden="true" /> : null}
+                      <span className={`truncate text-sm font-semibold ${entry.isUnread ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
+                        {entry.subject}
+                      </span>
+                    </div>
                   </div>
 
                   <p className="mt-1 truncate text-xs text-[var(--muted)]">{entry.from}</p>
@@ -861,31 +1033,57 @@ export default function InboxPanel() {
               <header className="rounded-2xl border border-[var(--border)] bg-white/70 px-4 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="text-xl font-semibold text-[var(--foreground)]">{selectedMessage.subject}</h2>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={isActionLoading}
-                      onClick={() => {
-                        setReplyMode("reply");
-                        setIsReplyOpen((value) => (replyMode === "reply" ? !value : true));
-                      }}
-                      className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {isReplyOpen && replyMode === "reply" ? "Close reply" : "Reply"}
-                    </button>
-
-                    {hasThreadCc ? (
+                  <div className="flex flex-wrap items-end justify-end gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
                       <button
                         type="button"
                         disabled={isActionLoading}
                         onClick={() => {
-                          setReplyMode("reply_all");
-                          setIsReplyOpen((value) => (replyMode === "reply_all" ? !value : true));
+                          setReplyMode("reply");
+                          setIsReplyOpen((value) => (replyMode === "reply" ? !value : true));
                         }}
-                        className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--foreground)] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {isReplyOpen && replyMode === "reply_all" ? "Close reply all" : "Reply all"}
+                        {isReplyOpen && replyMode === "reply" ? "Close reply" : "Reply"}
                       </button>
+
+                      {hasThreadCc ? (
+                        <button
+                          type="button"
+                          disabled={isActionLoading}
+                          onClick={() => {
+                            setReplyMode("reply_all");
+                            setIsReplyOpen((value) => (replyMode === "reply_all" ? !value : true));
+                          }}
+                          className="rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--foreground)] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isReplyOpen && replyMode === "reply_all" ? "Close reply all" : "Reply all"}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {senderEmail ? (
+                      <div className="w-full text-right">
+                        {senderCrmContact ? (
+                          <Link
+                            href={`/contacts?contactId=${encodeURIComponent(senderCrmContact.id)}`}
+                            className="inline-flex rounded-lg border border-[var(--border)] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--foreground)] transition hover:bg-slate-50"
+                          >
+                            Show contact
+                          </Link>
+                        ) : isSenderCrmLoading ? (
+                          <span className="inline-flex rounded-lg border border-[var(--border)] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                            Checking...
+                          </span>
+                        ) : (
+                          <Link
+                            href={`/contacts?createContact=1&email=${encodeURIComponent(senderEmail)}&firstName=${encodeURIComponent(senderPrefill?.firstName ?? "")}&lastName=${encodeURIComponent(senderPrefill?.lastName ?? "")}&source=inbox`}
+                            className="inline-flex rounded-lg bg-sky-600 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-white transition hover:bg-sky-700"
+                          >
+                            Create contact
+                          </Link>
+                        )}
+                      </div>
                     ) : null}
                   </div>
                 </div>
@@ -1304,4 +1502,77 @@ function buildStyledHtml(html: string, color: string) {
 
 function sanitizeCssValue(value: string) {
   return value.replace(/[<>"']/g, "");
+}
+
+function extractEmailAddressFromHeader(value: string) {
+  const bracketMatch = value.match(/<([^<>\s]+@[^<>\s]+)>/);
+
+  if (bracketMatch?.[1]) {
+    return bracketMatch[1].trim().toLowerCase();
+  }
+
+  const directMatch = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+
+  if (!directMatch?.[0]) {
+    return null;
+  }
+
+  return directMatch[0].trim().toLowerCase();
+}
+
+function parseSenderName(fromValue: string, fallbackEmail: string) {
+  const visibleName = fromValue
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\"/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (visibleName && !visibleName.includes("@")) {
+    const chunks = visibleName.split(" ").filter(Boolean);
+
+    if (chunks.length >= 2) {
+      return {
+        firstName: chunks[0],
+        lastName: chunks.slice(1).join(" "),
+      };
+    }
+
+    if (chunks.length === 1) {
+      return {
+        firstName: chunks[0],
+        lastName: "Contact",
+      };
+    }
+  }
+
+  const localPart = fallbackEmail.split("@")[0] ?? "";
+  const normalized = localPart.replace(/[._-]+/g, " ").trim();
+  const chunks = normalized.split(" ").filter(Boolean);
+
+  if (chunks.length >= 2) {
+    return {
+      firstName: capitalizeWord(chunks[0]),
+      lastName: chunks.slice(1).map(capitalizeWord).join(" "),
+    };
+  }
+
+  if (chunks.length === 1) {
+    return {
+      firstName: capitalizeWord(chunks[0]),
+      lastName: "Contact",
+    };
+  }
+
+  return {
+    firstName: "Email",
+    lastName: "Contact",
+  };
+}
+
+function capitalizeWord(value: string) {
+  if (!value) {
+    return value;
+  }
+
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 }
