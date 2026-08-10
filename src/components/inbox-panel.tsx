@@ -350,6 +350,8 @@ export default function InboxPanel() {
       return;
     }
 
+    const senderEmailForLookup = nextSenderEmail;
+
     let isCancelled = false;
 
     async function loadSenderCrmContact() {
@@ -370,7 +372,7 @@ export default function InboxPanel() {
 
         const lookupResult = await supabase.rpc("find_contact_by_email", {
           p_workspace_id: workspaceId,
-          p_email: nextSenderEmail,
+          p_email: senderEmailForLookup,
         });
 
         if (!lookupResult.error) {
@@ -383,7 +385,7 @@ export default function InboxPanel() {
             .from("crm_contacts")
             .select("id")
             .eq("workspace_id", workspaceId)
-            .ilike("email", nextSenderEmail)
+            .ilike("email", senderEmailForLookup)
             .order("updated_at", { ascending: false })
             .limit(1)
             .maybeSingle<{ id: string }>();
