@@ -115,7 +115,10 @@ export async function GET(request: NextRequest) {
     provider,
     options: {
       redirectTo,
-      scopes: "openid email profile offline_access Mail.ReadWrite Mail.Send Calendars.ReadWrite",
+      scopes: "openid email profile offline_access User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite",
+      queryParams: {
+        prompt: "consent",
+      },
     },
   });
 
