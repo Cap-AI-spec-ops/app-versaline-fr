@@ -1026,9 +1026,9 @@ async function getOutlookThread(accessToken: string, messageId: string, threadId
     return [parseOutlookThreadMessage(message)];
   }
 
+  // $orderby cannot be combined with $filter for conversationId — causes InefficientFilter (400). Sort client-side.
   const url = new URL("https://graph.microsoft.com/v1.0/me/messages");
   url.searchParams.set("$top", "50");
-  url.searchParams.set("$orderby", "receivedDateTime asc");
   url.searchParams.set("$filter", `conversationId eq '${threadId.replace(/'/g, "''")}'`);
   url.searchParams.set(
     "$select",

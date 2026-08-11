@@ -873,32 +873,36 @@ export default function InboxPanel() {
       </div>
 
       {error ? (
-        <div className="mx-5 mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
+        <div className="mx-5 mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          <p className="font-medium">Something went wrong with your inbox.</p>
+          {/outlook|gmail|mailbox|token|reconnect/i.test(error) ? (
+            <p className="mt-1">
+              Try{" "}
+              <a href="/settings/mailbox" className="underline underline-offset-2 hover:opacity-80">
+                reconnecting your account
+              </a>
+              . If the problem persists, contact support.
+            </p>
+          ) : (
+            <p className="mt-1">{error}</p>
+          )}
+        </div>
       ) : null}
 
       {message ? (
         <div className="mx-5 mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div>
       ) : null}
 
-      {messages.length === 0 && diagnostics ? (
-        <div className="mx-5 mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-          <p className="font-semibold uppercase tracking-[0.08em]">Inbox diagnostics</p>
+      {messages.length === 0 && diagnostics && !error ? (
+        <div className="mx-5 mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          <p className="font-medium">Something went wrong with your inbox.</p>
           <p className="mt-1">
-            Workspace: {diagnostics.workspaceId} | Profile: {diagnostics.profileId} | Auth user: {diagnostics.authUserId}
+            Try{" "}
+            <a href="/settings/mailbox" className="underline underline-offset-2 hover:opacity-80">
+              reconnecting your account
+            </a>
+            . If the problem persists, contact support.
           </p>
-          <div className="mt-2 space-y-1">
-            {diagnostics.connectionDiagnostics.length === 0 ? (
-              <p>No Gmail/Outlook mailbox connection row found for this user in this workspace.</p>
-            ) : (
-              diagnostics.connectionDiagnostics.map((row) => (
-                <p key={row.provider}>
-                  {row.provider}: account={row.accountEmail ?? "unknown"}, status={row.status}, fetched={row.fetchedCount}, accessToken={row.hasAccessToken ? "yes" : "no"}, refreshToken={row.hasRefreshToken ? "yes" : "no"}, lastSync={row.lastSyncedAt ?? "never"}
-                  {row.lastError ? `, lastError=${row.lastError}` : ""}
-                  {row.fetchError ? `, fetchError=${row.fetchError}` : ""}
-                </p>
-              ))
-            )}
-          </div>
         </div>
       ) : null}
 
