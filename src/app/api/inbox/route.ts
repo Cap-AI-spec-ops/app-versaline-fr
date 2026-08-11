@@ -664,7 +664,7 @@ async function listOutlookMessages(accessToken: string, mailbox: MailboxView): P
   const pageSize = Math.min(200, INBOX_LIST_PAGE_SIZE);
   const messages: InboxMessage[] = [];
 
-  async function collectFromUrl(initialUrl: string) {
+  async function collectFromUrl(initialUrl: string, enforceLookback = true) {
     let nextUrl: string | null = initialUrl;
 
     while (nextUrl) {
@@ -711,7 +711,7 @@ async function listOutlookMessages(accessToken: string, mailbox: MailboxView): P
         const receivedAt = message.receivedDateTime?.trim() || new Date().toISOString();
         const receivedAtMs = Date.parse(receivedAt);
 
-        if (!Number.isNaN(receivedAtMs) && receivedAtMs < cutoffTime) {
+        if (enforceLookback && !Number.isNaN(receivedAtMs) && receivedAtMs < cutoffTime) {
           reachedCutoff = true;
           break;
         }
@@ -747,14 +747,15 @@ async function listOutlookMessages(accessToken: string, mailbox: MailboxView): P
   listUrl.searchParams.set("$orderby", "receivedDateTime desc");
   listUrl.searchParams.set("$select", selectFields);
 
-  await collectFromUrl(listUrl.toString());
+  await collectFromUrl(listUrl.toString(), true);
 
   if (mailbox === "inbox" && messages.length === 0) {
     const fallbackUrl = new URL("https://graph.microsoft.com/v1.0/me/messages");
     fallbackUrl.searchParams.set("$top", String(pageSize));
     fallbackUrl.searchParams.set("$orderby", "receivedDateTime desc");
     fallbackUrl.searchParams.set("$select", selectFields);
-    await collectFromUrl(fallbackUrl.toString());
+    // If the mailbox has no recent items, still surface latest messages for visibility.
+    await collectFromUrl(fallbackUrl.toString(), false);
   }
 
   return messages;
