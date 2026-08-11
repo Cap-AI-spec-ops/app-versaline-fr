@@ -113,7 +113,7 @@ export const ACTION_CONFIG = {
       mistral: 'MODEL_ID_HERE',
       xai: 'MODEL_ID_HERE',
     },
-    creditCost: 1,
+    creditCost: 2,
     useCache: false,
   },
   document_generation: {
