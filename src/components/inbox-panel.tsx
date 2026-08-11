@@ -58,6 +58,7 @@ type InboxListResponse = {
       lastError: string | null;
       accountEmail: string | null;
       fetchedCount: number;
+      fetchError: string | null;
     }>;
   };
 };
@@ -893,6 +894,7 @@ export default function InboxPanel() {
                 <p key={row.provider}>
                   {row.provider}: account={row.accountEmail ?? "unknown"}, status={row.status}, fetched={row.fetchedCount}, accessToken={row.hasAccessToken ? "yes" : "no"}, refreshToken={row.hasRefreshToken ? "yes" : "no"}, lastSync={row.lastSyncedAt ?? "never"}
                   {row.lastError ? `, lastError=${row.lastError}` : ""}
+                  {row.fetchError ? `, fetchError=${row.fetchError}` : ""}
                 </p>
               ))
             )}

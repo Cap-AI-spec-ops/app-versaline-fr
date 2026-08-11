@@ -37,6 +37,7 @@ type ConnectionDiagnostic = {
   lastError: string | null;
   accountEmail: string | null;
   fetchedCount: number;
+  fetchError: string | null;
 };
 
 type InboxAssignmentRow = {
@@ -346,6 +347,7 @@ async function getListView(mailbox: MailboxView) {
 
       if (diagnostic) {
         diagnostic.fetchedCount = result.messages.length;
+        diagnostic.fetchError = result.warning;
       }
 
       if (result.warning) {
@@ -505,6 +507,7 @@ async function resolveInboxContext(): Promise<InboxContextSuccess | InboxContext
     lastError: connection.last_error ?? null,
     accountEmail: null,
     fetchedCount: 0,
+    fetchError: null,
   }));
 
   for (const diagnostic of connectionDiagnostics) {
